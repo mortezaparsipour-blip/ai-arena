@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Secrets / environment
+.env
+.env.local
+.env.*.local
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Databases
+*.db
+*.db-journal
+
+# Logs
+*.log
+logs/
+
+# Generated artifacts (trained models, run outputs, metadata)
+*.pkl
+models/
+backup/
+cache/
+catboost_info/
+backtest/results/
+
+# Large binary model weights
+*.gguf
+horse-ai-explainer/model/
+
+# Generated data dumps
+*.json
+!.devcontainer/devcontainer.json
+
+# Misc
+screen_shot/
+.streamlit/
+.claude/
+.kilo/
+dist/
+build/
+node_modules/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+.copy_state.json
+*_result.txt
+pytest_cache/
+.pytest_cache/
+htmlcov/
+.coverage
