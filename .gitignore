@@ -59,3 +59,7 @@ pytest_cache/
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Generated docs - not tracked in git
+QUICKSTART.md
+DEPLOYMENT.md
