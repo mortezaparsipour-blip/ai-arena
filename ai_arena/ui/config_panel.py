@@ -16,7 +16,7 @@ from ..providers.base import BaseProvider
 from ..providers.openai_provider import OpenAIProvider
 from ..providers.anthropic_provider import AnthropicProvider
 from ..providers.openrouter_provider import OpenRouterProvider
-from .icons import CPU, NETWORK, SETTINGS, SPARKLES, USERS, ZAP
+from ..providers.cerebras_provider import CerebrasProvider
 
 
 def get_available_providers() -> dict[str, BaseProvider]:
@@ -25,6 +25,7 @@ def get_available_providers() -> dict[str, BaseProvider]:
         "openai": OpenAIProvider(),
         "anthropic": AnthropicProvider(),
         "openrouter": OpenRouterProvider(),
+        "cerebras": CerebrasProvider(),
     }
 
 
@@ -41,12 +42,12 @@ def render_config_panel(
     Returns:
         Dictionary of configuration values from the UI.
     """
-    st.sidebar.header(f"{SETTINGS} Configuration")
+    st.sidebar.header("Configuration")
 
     providers = get_available_providers()
 
     # Global settings
-    with st.sidebar.expander(f"{CPU} Global Settings", expanded=True):
+    with st.sidebar.expander("Global Settings", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
             max_rounds = st.number_input(
@@ -72,7 +73,7 @@ def render_config_panel(
         )
 
     # Agent count
-    with st.sidebar.expander(f"{USERS} Agents", expanded=False):
+    with st.sidebar.expander("Agents", expanded=False):
         agent_count = st.number_input(
             "Number of agents",
             min_value=1,
@@ -166,7 +167,7 @@ def render_config_panel(
             agents.append(agent)
 
     # Session management
-    with st.sidebar.expander(f"{NETWORK} Sessions", expanded=False):
+    with st.sidebar.expander("Sessions", expanded=False):
         sessions = session_manager.list_sessions()
         session_options = ["New Session"] + [f"{s['name']} ({s['id']})" for s in sessions]
         selected = st.selectbox(

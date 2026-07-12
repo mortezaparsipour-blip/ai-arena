@@ -55,6 +55,7 @@ class OpenAIProvider(BaseProvider):
             response = client.chat.completions.create(
                 model=model,
                 messages=cast(list[ChatCompletionMessageParam], messages),
+                max_tokens=kwargs.get("max_tokens", 10000),
                 **kwargs,
             )
             content = response.choices[0].message.content

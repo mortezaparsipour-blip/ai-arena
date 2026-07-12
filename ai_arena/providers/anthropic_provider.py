@@ -61,7 +61,7 @@ class AnthropicProvider(BaseProvider):
             client = Anthropic(api_key=api_key)
             params: dict[str, Any] = {
                 "model": model,
-                "max_tokens": kwargs.get("max_tokens", 4096),
+                "max_tokens": kwargs.get("max_tokens", 10000),
                 "messages": chat_messages,
             }
             if system_message:

@@ -11,7 +11,6 @@ from typing import Any
 import streamlit as st
 
 from ..tools.file_tools import compute_diff
-from .icons import DOWNLOAD, FILE_TEXT, ACTIVITY, PAUSE, CHECK, ALERT
 
 
 def render_context_panel(

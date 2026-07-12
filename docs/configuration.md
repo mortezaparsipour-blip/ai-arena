@@ -32,6 +32,7 @@ The LLM provider to use. Available options:
 - **OpenAI** — GPT-4o, GPT-4 Turbo, GPT-4, GPT-3.5
 - **Anthropic** — Claude 3.5 Sonnet, Claude 3 Opus, Claude 3 Haiku
 - **OpenRouter** — Free and paid models via OpenRouter (e.g. `openrouter/free`)
+- **Cerebras** — High-speed inference for open models (e.g. `llama3.1-8b`, `gpt-oss-120b`)
 
 ### Model
 Specific model variant for the selected provider. Choices are populated dynamically based on provider selection.
@@ -87,6 +88,7 @@ Required environment variables (in `.env`):
 OPENAI_API_KEY=sk-...
 OPENROUTER_API_KEY=sk-or-...
 ANTHROPIC_API_KEY=sk-ant-...
+CEREBRAS_API_KEY=...
 ```
 
 UI-configured keys take precedence over `.env` values.

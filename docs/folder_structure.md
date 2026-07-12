@@ -15,7 +15,8 @@ ai-arena/
 │   │   ├── base.py                    # BaseProvider abstract class
 │   │   ├── openai_provider.py         # OpenAI API implementation
 │   │   ├── anthropic_provider.py      # Anthropic Claude API implementation
-│   │   └── openrouter_provider.py     # OpenRouter API implementation (free models)
+│   │   ├── openrouter_provider.py     # OpenRouter API implementation (free models)
+│   │   └── cerebras_provider.py       # Cerebras Cloud API implementation (high-speed inference)
 │   ├── tools/                         # Agent tool implementations
 │   │   ├── __init__.py
 │   │   ├── base.py                    # BaseTool abstract class and ToolResult
@@ -76,6 +77,7 @@ ai-arena/
 | `providers/openai_provider.py` | OpenAI API integration |
 | `providers/anthropic_provider.py` | Anthropic Claude API integration |
 | `providers/openrouter_provider.py` | OpenRouter API integration (free models) |
+| `providers/cerebras_provider.py` | Cerebras Cloud API integration (high-speed inference) |
 | `tools/base.py` | Abstract tool interface and result types |
 | `tools/file_tools.py` | File-based tools (read, write, append, patch, summarize) |
 | `engine/orchestrator.py` | Middleware: tool detection, retry loop, context updates |

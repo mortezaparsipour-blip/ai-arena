@@ -25,54 +25,10 @@ from ..models.session_state import SessionState
 from ..providers.anthropic_provider import AnthropicProvider
 from ..providers.openai_provider import OpenAIProvider
 from ..providers.openrouter_provider import OpenRouterProvider
+from ..providers.cerebras_provider import CerebrasProvider
 from .chat_panel import render_chat_panel
 from .config_panel import render_config_panel
 from .context_panel import render_context_panel
-from .icons import (
-    BOT,
-    CPU,
-    DOWNLOAD,
-    NETWORK,
-    PLAY,
-    PAUSE,
-    STOP,
-    SETTINGS,
-    USERS,
-    SPARKLES,
-    ZAP,
-    FILE_TEXT,
-    TERMINAL,
-    MESSAGE_SQUARE,
-    ALERT,
-    CHECK,
-    X,
-    PLUS,
-    MINUS,
-    EYE,
-    EYE_OFF,
-    COPY,
-    SAVE,
-    HOME,
-    ARROW_RIGHT,
-    ARROW_LEFT,
-    EXTERNAL_LINK,
-    STAR,
-    TARGET,
-    ACTIVITY,
-    LAYERS,
-    GIT_BRANCH,
-    DATABASE,
-    SERVER,
-    SHIELD,
-    LOCK,
-    KEY,
-    MENU,
-    SUN,
-    MOON,
-    GITHUB,
-    LINKEDIN,
-    TWITTER,
-)
 
 
 def _init_session_state() -> None:
@@ -98,6 +54,7 @@ def _get_orchestrator() -> Orchestrator:
         orchestrator.register_provider("openai", OpenAIProvider())
         orchestrator.register_provider("anthropic", AnthropicProvider())
         orchestrator.register_provider("openrouter", OpenRouterProvider())
+        orchestrator.register_provider("cerebras", CerebrasProvider())
         st.session_state["_orchestrator"] = orchestrator
     return st.session_state["_orchestrator"]
 
@@ -224,7 +181,7 @@ def render_app() -> None:
     """Main entry point for the Streamlit application."""
     st.set_page_config(
         page_title=config.app_name,
-        page_icon="",
+        page_icon="🤖",
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -319,7 +276,7 @@ def render_app() -> None:
     st.markdown(
         f"""
         <div class="hero">
-          <h1>{BOT} {config.app_name} <span style="opacity:.5;font-size:1rem">v{config.version}</span></h1>
+          <h1>🤖 {config.app_name} <span style="opacity:.5;font-size:1rem">v{config.version}</span></h1>
           <p>Multi-AI orchestration platform — agents collaborate on a shared context</p>
         </div>
         """,

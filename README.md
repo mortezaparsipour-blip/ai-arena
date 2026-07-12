@@ -5,7 +5,7 @@ A fully configurable, production-grade multi-AI orchestration platform where AI 
 ## Features
 
 - **Multi-Agent Ping-Pong Loop** — 2+ agents take turns processing a shared context file
-- **Provider Agnostic** — Supports OpenAI, Anthropic, OpenRouter, and extensible to more
+- **Provider Agnostic** — Supports OpenAI, Anthropic, OpenRouter, Cerebras, and extensible to more
 - **Real File-Based Context** — Shared context is a real Markdown file on disk
 - **Live UI** — Three-panel layout: configuration, conversation history, context viewer
 - **Session Management** — Create, switch between, and export multiple sessions
@@ -19,7 +19,7 @@ A fully configurable, production-grade multi-AI orchestration platform where AI 
 
 - **Python** >= 3.10
 - **Streamlit** — UI
-- **OpenAI / Anthropic / OpenRouter** — LLM providers
+- **OpenAI / Anthropic / OpenRouter / Cerebras** — LLM providers
 - **Pydantic** — data validation
 
 ## Quick Start
@@ -86,7 +86,8 @@ ai-arena/
 │   │   ├── base.py
 │   │   ├── openai_provider.py
 │   │   ├── anthropic_provider.py
-│   │   └── openrouter_provider.py
+│   │   ├── openrouter_provider.py
+│   │   └── cerebras_provider.py
 │   ├── tools/              # Agent file tools
 │   │   ├── base.py
 │   │   └── file_tools.py

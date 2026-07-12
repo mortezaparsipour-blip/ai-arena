@@ -41,7 +41,7 @@ When creating an agent, you configure:
 | `name` | Display name | `Researcher` |
 | `role` | Role type | `custom` |
 | `system_prompt` | Instructions for the agent | Loaded from file or custom text |
-| `provider` | LLM provider | `openai`, `anthropic`, `openrouter` |
+| `provider` | LLM provider | `openai`, `anthropic`, `openrouter`, `cerebras` |
 | `model` | Model identifier | `gpt-4o` |
 | `api_key` | Provider API key | `sk-...` |
 | `color` | UI display color | `#f59e0b` |
