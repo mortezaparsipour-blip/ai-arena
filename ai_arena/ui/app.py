@@ -69,9 +69,6 @@ from .icons import (
     MENU,
     SUN,
     MOON,
-    GITHUB,
-    LINKEDIN,
-    TWITTER,
 )
 
 

@@ -12,14 +12,14 @@ def load_svg(name: str) -> str:
     path = ICON_DIR / f"{name}.svg"
     if path.exists():
         svg = path.read_text(encoding="utf-8")
-        # Ensure width/height are 20 for consistent sizing
+        # Ensure consistent sizing
         if 'width="24"' in svg and 'height="24"' in svg:
             svg = svg.replace('width="24"', 'width="20"').replace('height="24"', 'height="20"')
         return svg
     return ""
 
 
-# Pre-load commonly used icons
+# Pre-loaded commonly used icons (kebab-case filenames match asset files)
 BOT = load_svg("bot")
 CPU = load_svg("cpu")
 SPARKLES = load_svg("sparkles")
@@ -38,19 +38,19 @@ CHEVRON_DOWN = load_svg("chevron-down")
 CHEVRON_UP = load_svg("chevron-up")
 X = load_svg("x")
 CHECK = load_svg("check")
-ALERT = load_svg("alert-triangle")
+ALERT = load_svg("triangle-alert")
 INFO = load_svg("info")
 GLOBE = load_svg("globe")
 REFRESH = load_svg("refresh-cw")
 TRASH = load_svg("trash-2")
-EDIT = load_svg("edit-2")
+EDIT = load_svg("pen")
 PLUS = load_svg("plus")
 MINUS = load_svg("minus")
 EYE = load_svg("eye")
 EYE_OFF = load_svg("eye-off")
 COPY = load_svg("copy")
 SAVE = load_svg("save")
-HOME = load_svg("home")
+HOME = load_svg("house")
 ARROW_RIGHT = load_svg("arrow-right")
 ARROW_LEFT = load_svg("arrow-left")
 EXTERNAL_LINK = load_svg("external-link")
@@ -67,9 +67,6 @@ KEY = load_svg("key")
 MENU = load_svg("menu")
 SUN = load_svg("sun")
 MOON = load_svg("moon")
-GITHUB = load_svg("github")
-LINKEDIN = load_svg("linkedin")
-TWITTER = load_svg("twitter")
 
 
 def get_icon(name: str) -> str:
