@@ -28,6 +28,51 @@ from ..providers.openrouter_provider import OpenRouterProvider
 from .chat_panel import render_chat_panel
 from .config_panel import render_config_panel
 from .context_panel import render_context_panel
+from .icons import (
+    BOT,
+    CPU,
+    DOWNLOAD,
+    NETWORK,
+    PLAY,
+    PAUSE,
+    STOP,
+    SETTINGS,
+    USERS,
+    SPARKLES,
+    ZAP,
+    FILE_TEXT,
+    TERMINAL,
+    MESSAGE_SQUARE,
+    ALERT,
+    CHECK,
+    X,
+    PLUS,
+    MINUS,
+    EYE,
+    EYE_OFF,
+    COPY,
+    SAVE,
+    HOME,
+    ARROW_RIGHT,
+    ARROW_LEFT,
+    EXTERNAL_LINK,
+    STAR,
+    TARGET,
+    ACTIVITY,
+    LAYERS,
+    GIT_BRANCH,
+    DATABASE,
+    SERVER,
+    SHIELD,
+    LOCK,
+    KEY,
+    MENU,
+    SUN,
+    MOON,
+    GITHUB,
+    LINKEDIN,
+    TWITTER,
+)
 
 
 def _init_session_state() -> None:
@@ -93,11 +138,19 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
         st.info("Create a session to begin.")
         return
 
+    # Show running indicator
+    if session.is_running:
+        with st.spinner("Session running...", show_time=True):
+            st.empty()
+
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         if st.button("Start", disabled=session.is_running, key="btn_start"):
-            initial_prompt = st.session_state.get("initial_prompt", "")
+            initial_prompt = st.session_state.get("initial_prompt", "").strip()
+            if not initial_prompt:
+                st.error("Please enter an initial prompt before starting.")
+                return
             orchestrator.start_session(session, initial_prompt=initial_prompt)
             st.session_state["orchestrator_running"] = True
             thread = threading.Thread(
@@ -131,12 +184,11 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
             st.rerun()
 
     # Export
-    if st.button("Export Session", key="btn_export"):
-        _export_session(session)
+    _render_export_button(session)
 
 
-def _export_session(session: SessionState) -> None:
-    """Export session as a markdown file."""
+def _render_export_button(session: SessionState) -> None:
+    """Render download button for session export."""
     lines = [
         f"# AI Arena Session: {session.name}",
         f"ID: {session.id}",
@@ -158,16 +210,21 @@ def _export_session(session: SessionState) -> None:
     if ctx_path.exists():
         lines.append(ctx_path.read_text(encoding="utf-8"))
 
-    export_path = config.context_storage_dir / f"export_{session.id}.md"
-    export_path.write_text("\n".join(lines), encoding="utf-8")
-    st.success(f"Exported to {export_path}")
+    content = "\n".join(lines)
+    st.download_button(
+        label="Export Session",
+        data=content,
+        file_name=f"ai_arena_session_{session.id}.md",
+        mime="text/markdown",
+        key="btn_export",
+    )
 
 
 def render_app() -> None:
     """Main entry point for the Streamlit application."""
     st.set_page_config(
         page_title=config.app_name,
-        page_icon="🤖",
+        page_icon="",
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -197,7 +254,7 @@ def render_app() -> None:
         /* Buttons */
         .stButton > button, .stDownloadButton > button {
             padding: .34rem .85rem; font-size: .88rem; font-weight: 600;
-            border-radius: 9px; min-height: 0; line-height: 1.25;
+            border-radius: 9px; min-height: 44px; line-height: 1.25;
             border: 1px solid #ffffff26; transition: all .12s ease;
         }
         .stButton > button:hover, .stDownloadButton > button:hover {
@@ -246,6 +303,14 @@ def render_app() -> None:
 
         hr {margin: .9rem 0; border-color: #ffffff14;}
         footer {visibility: hidden;}
+
+        /* Reduced motion */
+        @media (prefers-reduced-motion: reduce) {
+            .stButton > button, .stDownloadButton > button {
+                transition: none !important;
+                transform: none !important;
+            }
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -254,7 +319,7 @@ def render_app() -> None:
     st.markdown(
         f"""
         <div class="hero">
-          <h1>🤖 {config.app_name} <span style="opacity:.5;font-size:1rem">v{config.version}</span></h1>
+          <h1>{BOT} {config.app_name} <span style="opacity:.5;font-size:1rem">v{config.version}</span></h1>
           <p>Multi-AI orchestration platform — agents collaborate on a shared context</p>
         </div>
         """,
@@ -266,13 +331,11 @@ def render_app() -> None:
     orchestrator = _get_orchestrator()
     session_manager = _get_session_manager()
 
-    st.title(config.app_name)
-
     # Config panel
     config_values = render_config_panel(orchestrator, session_manager)
 
     # Initial prompt
-    with st.expander("Initial Prompt", expanded=False):
+    with st.expander("Initial Prompt", expanded=True):
         initial_prompt = st.text_area(
             "Enter the initial prompt for the first agent",
             value=st.session_state.get("initial_prompt", ""),
@@ -292,8 +355,12 @@ def render_app() -> None:
     if st.session_state.get("last_error"):
         st.error(st.session_state["last_error"])
 
-    # Three-column layout
-    col_chat, col_center, col_context = st.columns([1, 1, 1])
+    # Loading indicator
+    if session and session.is_running:
+        st.spinner("Session running...")
+
+    # Three-column layout (responsive on mobile)
+    col_chat, col_center, col_context = st.columns([1, 1, 1], gap="medium")
 
     with col_chat:
         if session:
@@ -302,18 +369,14 @@ def render_app() -> None:
             st.info("No active session.")
 
     with col_center:
-        st.header("Status")
         if session:
-            st.json({
-                "Session": session.name,
-                "Round": f"{session.current_round} / {session.max_rounds}",
-                "Running": session.is_running,
-                "Paused": session.is_paused,
-                "Dry Run": session.is_dry_run,
-                "Agents": len(session.agents),
-            })
+            st.metric("Session", session.name)
+            st.metric("Round", f"{session.current_round} / {session.max_rounds}")
+            st.metric("Status", "Running" if session.is_running else ("Paused" if session.is_paused else "Idle"))
+            st.metric("Dry Run", "Yes" if session.is_dry_run else "No")
+            st.metric("Agents", len(session.agents))
             if session.summary_agent:
-                st.markdown(f"**Summary Agent:** {session.summary_agent.name}")
+                st.metric("Summary Agent", session.summary_agent.name)
         else:
             st.info("No active session.")
 

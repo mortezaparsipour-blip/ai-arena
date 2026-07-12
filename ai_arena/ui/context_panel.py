@@ -11,6 +11,7 @@ from typing import Any
 import streamlit as st
 
 from ..tools.file_tools import compute_diff
+from .icons import DOWNLOAD, FILE_TEXT, ACTIVITY, PAUSE, CHECK, ALERT
 
 
 def render_context_panel(
@@ -48,5 +49,12 @@ def render_context_panel(
     if ctx_path.exists():
         content = ctx_path.read_text(encoding="utf-8")
         st.code(content, language="markdown")
+        st.download_button(
+            label="Download Context",
+            data=content,
+            file_name=f"context_{session.id}.md",
+            mime="text/markdown",
+            key=f"download_context_{session.id}",
+        )
     else:
         st.info("Context file not yet created.")
