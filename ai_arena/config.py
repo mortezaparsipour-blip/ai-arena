@@ -92,7 +92,9 @@ class AppConfig:
         """
         env_keys = [f"{provider.upper()}_API_KEY"]
         if provider.lower() == "openrouter":
-            env_keys.insert(0, "OPENROUTER_API_KEY")
+            # OpenRouter is commonly configured under OPENAI_API_KEY (it uses
+            # the OpenAI-compatible SDK). Accept either name.
+            env_keys.insert(0, "OPENAI_API_KEY")
         for key in env_keys:
             value = os.environ.get(key, "").strip()
             if value:
