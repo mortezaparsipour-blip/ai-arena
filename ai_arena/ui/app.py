@@ -111,7 +111,8 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
 
     with col1:
         if st.button(
-            f"{icon('play')} Start",
+            "Start",
+            icon="▶",
             disabled=running,
             key="btn_start",
             help="Start the orchestration loop",
@@ -126,7 +127,8 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
 
     with col2:
         if st.button(
-            f"{icon('pause')} Pause",
+            "Pause",
+            icon="⏸",
             disabled=not running,
             key="btn_pause",
             help="Pause after the current step",
@@ -136,7 +138,8 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
 
     with col3:
         if st.button(
-            f"{icon('play')} Resume",
+            "Resume",
+            icon="▶",
             disabled=not paused,
             key="btn_resume",
             help="Resume a paused session",
@@ -147,7 +150,8 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
 
     with col4:
         if st.button(
-            f"{icon('stop')} Stop",
+            "Stop",
+            icon="⏹",
             disabled=not (running or paused),
             key="btn_stop",
             help="Stop the orchestration loop",
@@ -183,7 +187,8 @@ def _render_export_button(session: SessionState) -> None:
 
     content = "\n".join(lines)
     st.download_button(
-        label=f"{icon('download')} Export Session",
+        label="Export Session",
+        icon="⬇",
         data=content,
         file_name=f"ai_arena_session_{session.id}.md",
         mime="text/markdown",
@@ -440,7 +445,7 @@ def render_app() -> None:
     render_config_panel(orchestrator, session_manager)
 
     # Initial prompt
-    with st.expander(f"{icon('message', 16)} Initial Prompt", expanded=True):
+    with st.expander("Initial Prompt", icon="💬", expanded=True):
         st.text_area(
             "Enter the initial prompt for the first agent",
             value=st.session_state.get("initial_prompt", ""),

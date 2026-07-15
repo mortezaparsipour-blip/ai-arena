@@ -23,7 +23,7 @@ def render_context_panel(
         session: Current session state.
         orchestrator: The Orchestrator instance.
     """
-    st.header(f"{icon('file_text', 18)} Shared Context")
+    st.header("Shared Context")
 
     if not session:
         st.info("No active session.")
@@ -39,9 +39,9 @@ def render_context_panel(
                 unsafe_allow_html=True,
             )
     elif session.is_paused:
-        st.warning(f"{icon('pause', 14)} Paused")
+        st.warning("Paused", icon="⏸")
     elif session.is_complete():
-        st.success(f"{icon('check', 14)} Completed!")
+        st.success("Completed!", icon="✓")
 
     # Read context file
     ctx_path = Path(session.context_file_path)
@@ -49,7 +49,8 @@ def render_context_panel(
         content = ctx_path.read_text(encoding="utf-8")
         st.code(content, language="markdown")
         st.download_button(
-            label=f"{icon('download', 14)} Download Context",
+            label="Download Context",
+            icon="⬇",
             data=content,
             file_name=f"context_{session.id}.md",
             mime="text/markdown",

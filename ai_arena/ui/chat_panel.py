@@ -90,7 +90,7 @@ def render_chat_panel(messages: list[Message], current_agent: Any | None) -> Non
         messages: List of messages in the conversation.
         current_agent: The currently active agent, if any.
     """
-    st.header(f"{icon('message', 18)} Conversation")
+    st.header("Conversation")
 
     if not messages:
         st.info("No messages yet. Configure agents and start a session.")

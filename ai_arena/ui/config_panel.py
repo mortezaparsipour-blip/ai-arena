@@ -48,7 +48,7 @@ def _render_tools_panel() -> None:
     agents can call. Data comes from the global ``tool_registry`` so it
     always reflects the current set of registered tools.
     """
-    with st.sidebar.expander(f"{icon('wrench', 16)} Available Tools", expanded=False):
+    with st.sidebar.expander("Available Tools", icon="🔧", expanded=False):
         for tool in tool_registry.list_tools():
             st.markdown(
                 f"<div class='tool-card'>"
@@ -71,11 +71,11 @@ def render_config_panel(
         so the call site can construct a session from the same agents the
         user just configured.
     """
-    st.sidebar.header(f"{icon('settings', 18)} Configuration")
+    st.sidebar.header("Configuration")
 
     providers = get_available_providers()
 
-    with st.sidebar.expander(f"{icon('sliders', 16)} Global Settings", expanded=True):
+    with st.sidebar.expander("Global Settings", icon="⚙", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
             max_rounds = st.number_input(
@@ -114,7 +114,7 @@ def render_config_panel(
             key="is_dry_run",
         )
 
-    with st.sidebar.expander(f"{icon('users', 16)} Agents", expanded=False):
+    with st.sidebar.expander("Agents", icon="👥", expanded=False):
         agent_count = st.number_input(
             "Number of agents",
             min_value=1,
@@ -227,7 +227,7 @@ def render_config_panel(
 
     _render_tools_panel()
 
-    with st.sidebar.expander(f"{icon('network', 16)} Sessions", expanded=False):
+    with st.sidebar.expander("Sessions", icon="📂", expanded=False):
         sessions = session_manager.list_sessions()
         session_options = ["New Session"] + [f"{s['name']} ({s['id']})" for s in sessions]
         selected = st.selectbox(
@@ -241,11 +241,11 @@ def render_config_panel(
             sid = sessions[session_options.index(selected) - 1]["id"]
             col_a, col_b = st.columns(2)
             with col_a:
-                if st.button(f"{icon('arrow_right', 14)} Switch", key="switch_session"):
+                if st.button("Switch", icon="➡", key="switch_session"):
                     session_manager.set_active_session(sid)
                     st.rerun()
             with col_b:
-                if st.button(f"{icon('trash', 14)} Delete", key="delete_session"):
+                if st.button("Delete", icon="🗑", key="delete_session"):
                     session_manager.delete_session(sid)
                     st.rerun()
 
@@ -255,7 +255,7 @@ def render_config_panel(
             key="session_name",
         )
 
-        if st.button(f"{icon('check', 14)} Create Session", key="create_session", type="primary"):
+        if st.button("Create Session", icon="✓", key="create_session", type="primary"):
             session = session_manager.create_session(
                 name=session_name,
                 agents=agents,
