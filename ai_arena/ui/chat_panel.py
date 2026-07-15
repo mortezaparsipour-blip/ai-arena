@@ -55,21 +55,13 @@ def _bubble_label(msg: Message) -> tuple[str, str]:
     return msg.agent_name, msg.agent_name[:2].upper()
 
 
-def _bubble_badge(label: str, variant: str, color: str) -> str:
-    """Render the small colored badge that sits to the left of each bubble."""
-    if msg_color_for(variant, color) is None:
-        bg = "#475569"
-    else:
-        bg = msg_color_for(variant, color)
-    return (
-        f"<div style='background-color:{bg};color:white;padding:6px 10px;"
-        f"border-radius:6px;font-size:0.85em;font-weight:600;text-align:center;"
-        f"margin-top:4px;min-width:36px;'>{label}</div>"
-    )
-
-
 def msg_color_for(variant: str, agent_color: str) -> str:
-    """Map a bubble variant to its background color for the badge."""
+    """Map a bubble variant to its background color for the badge.
+
+    Always returns a color string — the variant wins over the agent color
+    so error/warning/tool/system bubbles are visually distinct regardless
+    of which agent produced them.
+    """
     if variant == "error":
         return "#ef4444"
     if variant == "warning":
@@ -79,6 +71,16 @@ def msg_color_for(variant: str, agent_color: str) -> str:
     if variant == "system":
         return "#475569"
     return agent_color
+
+
+def _bubble_badge(label: str, variant: str, color: str) -> str:
+    """Render the small colored badge that sits to the left of each bubble."""
+    bg = msg_color_for(variant, color)
+    return (
+        f"<div style='background-color:{bg};color:white;padding:6px 10px;"
+        f"border-radius:6px;font-size:0.85em;font-weight:600;text-align:center;"
+        f"margin-top:4px;min-width:36px;'>{label}</div>"
+    )
 
 
 def render_chat_panel(messages: list[Message], current_agent: Any | None) -> None:

@@ -32,8 +32,26 @@ from .icons import icon
 from .tokens import css_variables_block
 
 
-# Files in the project root that Streamlit should serve as a static favicon.
-_FAVICON = Path(__file__).resolve().parents[2] / ".streamlit" / "favicon.svg"
+# Inline SVG favicon. Shipped as a data URI so the page icon never
+# depends on a file existing on disk (the old code had an emoji
+# fallback that fired when ``favicon.svg`` was missing).
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" '
+    'stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
+    '<rect x="6" y="10" width="20" height="14" rx="3" fill="#1e1b4b"/>'
+    '<path d="M12 10V6h8v4" fill="none"/>'
+    '<circle cx="12" cy="17" r="1.5" fill="#a78bfa" stroke="none"/>'
+    '<circle cx="20" cy="17" r="1.5" fill="#a78bfa" stroke="none"/>'
+    '<line x1="3" y1="17" x2="6" y2="17"/>'
+    '<line x1="26" y1="17" x2="29" y2="17"/>'
+    '<line x1="16" y1="18" x2="16" y2="22"/>'
+    '</svg>'
+)
+# ``st.set_page_config`` accepts a URL for ``page_icon`` and ``data:`` URIs
+# render correctly in the browser tab.
+_FAVICON_DATA_URI = (
+    "data:image/svg+xml;utf8," + _FAVICON_SVG.replace('"', "'").replace("#", "%23")
+)
 
 
 def _init_session_state() -> None:
@@ -239,7 +257,7 @@ def render_app() -> None:
     """Main entry point for the Streamlit application."""
     st.set_page_config(
         page_title=config.app_name,
-        page_icon=str(_FAVICON) if _FAVICON.exists() else "🛰",
+        page_icon=_FAVICON_DATA_URI,
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -358,6 +376,28 @@ def render_app() -> None:
         .streamlit-expanderHeader {{
             background: var(--bg-surface) !important;
             border-radius: 8px !important;
+        }}
+
+        /* Sidebar scroll containment.
+           The config panel grows with the number of agents and the tools
+           list; on a 13" laptop that pushes the initial prompt and Start
+           button off-screen. Cap the height to the viewport and let the
+           sidebar scroll internally. ``vh - 60px`` leaves room for the
+           Streamlit header. */
+        [data-testid="stSidebar"] > div:first-child {{
+            max-height: calc(100vh - 60px);
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding-right: 6px;
+            scrollbar-width: thin;
+            scrollbar-color: var(--overlay-4) transparent;
+        }}
+        [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar {{
+            width: 6px;
+        }}
+        [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar-thumb {{
+            background: var(--overlay-4);
+            border-radius: 3px;
         }}
 
         pre {{

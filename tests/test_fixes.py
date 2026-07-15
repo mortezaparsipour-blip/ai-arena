@@ -12,6 +12,7 @@ Covers:
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -28,8 +29,8 @@ from ai_arena.providers.base import ProviderError
 # ---------------------------------------------------------------------------
 # P0-1: SessionManager disk round-trip
 # ---------------------------------------------------------------------------
-def test_session_manager_reload_from_disk(tmp_dir: Path) -> None:
-    sm = SessionManager(storage_dir=tmp_dir)
+def test_session_manager_reload_from_disk(tmp_path: Path) -> None:
+    sm = SessionManager(storage_dir=tmp_path)
     agent = Agent(
         id="a1", name="A", role=AgentRole.CRITIC,
         system_prompt="x", provider="openai", model="gpt-4o", api_key="",
@@ -38,7 +39,7 @@ def test_session_manager_reload_from_disk(tmp_dir: Path) -> None:
     session_id = session.id
 
     # Simulate a process restart: build a brand new manager on the same dir.
-    sm2 = SessionManager(storage_dir=tmp_dir)
+    sm2 = SessionManager(storage_dir=tmp_path)
     reloaded = sm2.get_session(session_id)
     assert reloaded is not None, "session was not reloaded from disk"
     assert reloaded.name == "Reload test"
@@ -118,18 +119,18 @@ def test_rate_limiter_preserves_last_call() -> None:
 # ---------------------------------------------------------------------------
 # P1-6: Atomic _save_session
 # ---------------------------------------------------------------------------
-def test_save_session_atomic(tmp_dir: Path) -> None:
-    sm = SessionManager(storage_dir=tmp_dir)
+def test_save_session_atomic(tmp_path: Path) -> None:
+    sm = SessionManager(storage_dir=tmp_path)
     agent = Agent(
         id="a1", name="A", role=AgentRole.CRITIC,
         system_prompt="x", provider="openai", model="gpt-4o", api_key="",
     )
     session = sm.create_session("Atomic", [agent], max_rounds=1, rate_limit=0)
     # After a successful save there must be no .json.tmp left behind.
-    leftovers = list(tmp_dir.glob("*.json.tmp"))
+    leftovers = list(tmp_path.glob("*.json.tmp"))
     assert not leftovers, f"unexpected tmp files: {leftovers}"
     # File is valid JSON.
-    on_disk = json.loads((tmp_dir / f"session_{session.id}.json").read_text("utf-8"))
+    on_disk = json.loads((tmp_path / f"session_{session.id}.json").read_text("utf-8"))
     assert on_disk["id"] == session.id
     print("Atomic _save_session test passed")
 
@@ -221,15 +222,15 @@ def test_orchestrator_forwards_max_tokens() -> None:
 # ---------------------------------------------------------------------------
 # tool_max_retries override
 # ---------------------------------------------------------------------------
-def test_session_tool_max_retries_override(tmp_dir: Path) -> None:
-    sm = SessionManager(storage_dir=tmp_dir)
+def test_session_tool_max_retries_override(tmp_path: Path) -> None:
+    sm = SessionManager(storage_dir=tmp_path)
     agent = Agent(id="a", name="A", role=AgentRole.CRITIC,
                   system_prompt="x", provider="openai", model="gpt-4o", api_key="")
     session = sm.create_session("retries", [agent], max_rounds=1,
                                  rate_limit=0, tool_max_retries=7)
     assert session.tool_max_retries == 7
     # Reload to confirm it persisted.
-    sm2 = SessionManager(storage_dir=tmp_dir)
+    sm2 = SessionManager(storage_dir=tmp_path)
     reloaded = sm2.get_session(session.id)
     assert reloaded is not None
     assert reloaded.tool_max_retries == 7
