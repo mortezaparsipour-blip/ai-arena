@@ -41,7 +41,7 @@ def render_context_panel(
     elif session.is_paused:
         st.warning("Paused", icon="⏸")
     elif session.is_complete():
-        st.success("Completed!", icon="✓")
+        st.success("Completed!", icon="✅")
 
     # Read context file
     ctx_path = Path(session.context_file_path)

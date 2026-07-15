@@ -255,7 +255,7 @@ def render_config_panel(
             key="session_name",
         )
 
-        if st.button("Create Session", icon="✓", key="create_session", type="primary"):
+        if st.button("Create Session", icon="➕", key="create_session", type="primary"):
             session = session_manager.create_session(
                 name=session_name,
                 agents=agents,
