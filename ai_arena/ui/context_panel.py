@@ -10,7 +10,7 @@ from typing import Any
 
 import streamlit as st
 
-from ..tools.file_tools import compute_diff
+from .icons import icon
 
 
 def render_context_panel(
@@ -23,25 +23,25 @@ def render_context_panel(
         session: Current session state.
         orchestrator: The Orchestrator instance.
     """
-    st.header("Shared Context")
+    st.header(f"{icon('file_text', 18)} Shared Context")
 
     if not session:
         st.info("No active session.")
         return
 
-    # Progress indicator
-    progress = session.current_round / session.max_rounds if session.max_rounds > 0 else 0.0
-    st.progress(min(progress, 1.0), text=f"Round {session.current_round + 1} / {session.max_rounds}")
-
     active_agents = session.get_active_agents()
     if active_agents and session.is_running:
         current = session.get_current_agent()
         if current:
-            st.markdown(f"**Active:** {current.name} ({current.role.value})")
+            st.markdown(
+                f"<div class='active-agent'>{icon('cpu', 14)} "
+                f"<b>Active:</b> {current.name} ({current.role.value})</div>",
+                unsafe_allow_html=True,
+            )
     elif session.is_paused:
-        st.warning("Paused")
+        st.warning(f"{icon('pause', 14)} Paused")
     elif session.is_complete():
-        st.success("Completed!")
+        st.success(f"{icon('check', 14)} Completed!")
 
     # Read context file
     ctx_path = Path(session.context_file_path)
@@ -49,7 +49,7 @@ def render_context_panel(
         content = ctx_path.read_text(encoding="utf-8")
         st.code(content, language="markdown")
         st.download_button(
-            label="Download Context",
+            label=f"{icon('download', 14)} Download Context",
             data=content,
             file_name=f"context_{session.id}.md",
             mime="text/markdown",

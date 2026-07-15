@@ -7,6 +7,7 @@ audit logging.
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -54,9 +55,43 @@ class Orchestrator:
         self.session_manager = session_manager or SessionManager()
         self.rate_limiter = rate_limiter or RateLimiter()
         self._stop_event = False
+        self._state_lock = threading.Lock()
+        self._loop_thread: Optional[threading.Thread] = None
+        self._is_running: bool = False
+        self._last_error: Optional[str] = None
         self._providers: dict[str, BaseProvider] = {}
         self.tool_registry = tool_registry_instance or tool_registry
         self.max_tool_retries = max_tool_retries
+
+    # -- Thread-safe status accessors -----------------------------------------
+    # The background loop writes these flags; the Streamlit main thread reads
+    # them on every rerun. Sharing via a lock avoids corrupting
+    # ``st.session_state`` from a non-main thread.
+
+    def is_loop_running(self) -> bool:
+        """Return whether the background loop is currently executing."""
+        with self._state_lock:
+            return self._is_running
+
+    def consume_last_error(self) -> Optional[str]:
+        """Atomically read and clear the latest background-loop error."""
+        with self._state_lock:
+            err = self._last_error
+            self._last_error = None
+            return err
+
+    def _set_loop_running(self, value: bool) -> None:
+        with self._state_lock:
+            self._is_running = value
+
+    def _set_last_error(self, message: Optional[str]) -> None:
+        with self._state_lock:
+            self._last_error = message
+
+    def is_loop_alive(self) -> bool:
+        """Return whether the background thread has been started and is alive."""
+        thread = self._loop_thread
+        return thread is not None and thread.is_alive()
 
     def register_provider(self, name: str, provider: BaseProvider) -> None:
         """Register a provider by name."""
@@ -161,6 +196,7 @@ class Orchestrator:
                 messages=messages,
                 model=agent.model,
                 api_key=agent.api_key,
+                max_tokens=agent.max_tokens,
             )
             return response
         except ProviderError:
@@ -424,7 +460,10 @@ class Orchestrator:
         session.current_agent_index = 0
         session.messages = []
 
-        self.rate_limiter = RateLimiter(delay_seconds=float(session.rate_limit_seconds))
+        # Update the existing rate limiter's delay without rebuilding it,
+        # so the previous ``_last_call`` timestamp is preserved and burst
+        # protection still applies to the first call after a resume.
+        self.rate_limiter.delay_seconds = float(session.rate_limit_seconds)
 
         if initial_prompt:
             ctx_path = Path(session.context_file_path)
@@ -474,3 +513,51 @@ class Orchestrator:
 
         self.session_manager._save_session(session)
         return message
+
+    def run_loop(self, session: SessionState, poll_interval: float = 0.5) -> None:
+        """Background loop body. Designed to run in a daemon thread.
+
+        Exits when ``session.is_running`` flips to False, when
+        ``session.is_complete()`` is True, or when an exception bubbles up.
+        All state changes go through the orchestrator's lock-protected
+        accessors so the main (Streamlit) thread can read them safely.
+        """
+        self._set_loop_running(True)
+        try:
+            while session.is_running and not session.is_paused:
+                if session.is_complete():
+                    session.is_running = False
+                    break
+                try:
+                    self.step(session)
+                except Exception as exc:  # noqa: BLE001 — top-level guard
+                    self._set_last_error(f"{type(exc).__name__}: {exc}")
+                    session.is_running = False
+                    break
+                # Cooperative sleep — keeps the thread cheap to interrupt.
+                time.sleep(poll_interval)
+        finally:
+            self._set_loop_running(False)
+            try:
+                self.session_manager._save_session(session)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def start_background(self, session: SessionState) -> threading.Thread:
+        """Spawn the orchestration loop in a daemon thread.
+
+        Returns the thread handle so the caller can join() if needed.
+        If a previous thread is still alive, returns it without spawning
+        a second one.
+        """
+        existing = self._loop_thread
+        if existing is not None and existing.is_alive():
+            return existing
+        thread = threading.Thread(
+            target=self.run_loop,
+            args=(session,),
+            daemon=True,
+        )
+        self._loop_thread = thread
+        thread.start()
+        return thread

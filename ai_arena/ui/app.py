@@ -1,16 +1,17 @@
 """Main Streamlit application for AI Arena.
 
-Implements the three-panel layout:
-- Left: Conversation history
-- Center: Controls and progress
-- Right: Shared context file view
+Layout (responsive, collapses gracefully on mobile):
+    +---------------------------------------------+
+    |              hero banner                    |
+    +---------------------------------------------+
+    | config (sidebar) |  chat | metrics | ctx    |
+    +---------------------------------------------+
+    |   initial prompt    |   controls / export   |
+    +---------------------------------------------+
 """
 
 from __future__ import annotations
 
-import json
-import threading
-import time
 from pathlib import Path
 from typing import Any
 
@@ -18,29 +19,35 @@ import streamlit as st
 
 from ..config import config
 from ..engine.orchestrator import Orchestrator
-from ..engine.rate_limiter import RateLimiter
 from ..engine.session import SessionManager
-from ..models.agent import Agent
 from ..models.session_state import SessionState
 from ..providers.anthropic_provider import AnthropicProvider
+from ..providers.cerebras_provider import CerebrasProvider
 from ..providers.openai_provider import OpenAIProvider
 from ..providers.openrouter_provider import OpenRouterProvider
-from ..providers.cerebras_provider import CerebrasProvider
 from .chat_panel import render_chat_panel
 from .config_panel import render_config_panel
 from .context_panel import render_context_panel
+from .icons import icon
+from .tokens import css_variables_block
+
+
+# Files in the project root that Streamlit should serve as a static favicon.
+_FAVICON = Path(__file__).resolve().parents[2] / ".streamlit" / "favicon.svg"
 
 
 def _init_session_state() -> None:
-    """Initialize Streamlit session state defaults."""
+    """Initialize Streamlit session state defaults.
+
+    Only the *Streamlit-side* state lives here. The orchestrator's own
+    thread-safe flags (loop running, last error) live on the Orchestrator
+    instance, never in ``st.session_state``.
+    """
     defaults = {
         "current_session_id": None,
-        "orchestrator_running": False,
         "initialized": False,
         "_orchestrator": None,
         "_session_manager": None,
-        "_rate_limiter": None,
-        "last_error": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -66,81 +73,70 @@ def _get_session_manager() -> SessionManager:
     return st.session_state["_session_manager"]
 
 
-def _get_rate_limiter() -> RateLimiter:
-    """Get or create the rate limiter, persisting it in session state."""
-    if st.session_state.get("_rate_limiter") is None:
-        st.session_state["_rate_limiter"] = RateLimiter()
-    return st.session_state["_rate_limiter"]
-
-
-def _run_loop(orchestrator: Orchestrator, session: SessionState) -> None:
-    """Run the orchestration loop in a background thread."""
-    while session.is_running and not session.is_paused:
-        if session.is_complete():
-            session.is_running = False
-            break
-        try:
-            orchestrator.step(session)
-        except Exception as exc:
-            st.session_state["last_error"] = str(exc)
-            session.is_running = False
-            break
-        time.sleep(0.1)
-    st.session_state["orchestrator_running"] = False
+def _consume_loop_error(orchestrator: Orchestrator) -> str | None:
+    """Pull the latest background-loop error (one-shot) and surface it."""
+    return orchestrator.consume_last_error()
 
 
 def render_control_buttons(orchestrator: Orchestrator, session: SessionState | None) -> None:
     """Render start, pause, resume, stop, and export buttons."""
     if not session:
-        st.info("Create a session to begin.")
         return
 
-    # Show running indicator
-    if session.is_running:
-        with st.spinner("Session running...", show_time=True):
-            st.empty()
+    # Live "is the background loop currently alive?" comes from the orchestrator
+    # so the main thread doesn't have to read state set by the worker thread.
+    loop_alive = orchestrator.is_loop_alive()
+    running = session.is_running and loop_alive
+    paused = session.is_paused
 
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        if st.button("Start", disabled=session.is_running, key="btn_start"):
+        if st.button(
+            f"{icon('play')} Start",
+            disabled=running,
+            key="btn_start",
+            help="Start the orchestration loop",
+        ):
             initial_prompt = st.session_state.get("initial_prompt", "").strip()
             if not initial_prompt:
                 st.error("Please enter an initial prompt before starting.")
-                return
+                st.stop()
             orchestrator.start_session(session, initial_prompt=initial_prompt)
-            st.session_state["orchestrator_running"] = True
-            thread = threading.Thread(
-                target=_run_loop,
-                args=(orchestrator, session),
-                daemon=True,
-            )
-            thread.start()
+            orchestrator.start_background(session)
             st.rerun()
 
     with col2:
-        if st.button("Pause", disabled=not session.is_running, key="btn_pause"):
+        if st.button(
+            f"{icon('pause')} Pause",
+            disabled=not running,
+            key="btn_pause",
+            help="Pause after the current step",
+        ):
             orchestrator.pause_session(session)
             st.rerun()
 
     with col3:
-        if st.button("Resume", disabled=not session.is_paused, key="btn_resume"):
+        if st.button(
+            f"{icon('play')} Resume",
+            disabled=not paused,
+            key="btn_resume",
+            help="Resume a paused session",
+        ):
             orchestrator.resume_session(session)
-            st.session_state["orchestrator_running"] = True
-            thread = threading.Thread(
-                target=_run_loop,
-                args=(orchestrator, session),
-                daemon=True,
-            )
-            thread.start()
+            orchestrator.start_background(session)
             st.rerun()
 
     with col4:
-        if st.button("Stop", disabled=not session.is_running and not session.is_paused, key="btn_stop"):
+        if st.button(
+            f"{icon('stop')} Stop",
+            disabled=not (running or paused),
+            key="btn_stop",
+            help="Stop the orchestration loop",
+        ):
             orchestrator.stop_session(session)
             st.rerun()
 
-    # Export
     _render_export_button(session)
 
 
@@ -169,7 +165,7 @@ def _render_export_button(session: SessionState) -> None:
 
     content = "\n".join(lines)
     st.download_button(
-        label="Export Session",
+        label=f"{icon('download')} Export Session",
         data=content,
         file_name=f"ai_arena_session_{session.id}.md",
         mime="text/markdown",
@@ -177,97 +173,207 @@ def _render_export_button(session: SessionState) -> None:
     )
 
 
+def _render_metrics(session: SessionState) -> None:
+    """Render the center status column with metrics and progress."""
+    active_agent = session.get_current_agent() if session.is_running else None
+    status_label = "Idle"
+    if session.is_running:
+        status_label = "Running"
+    elif session.is_paused:
+        status_label = "Paused"
+    elif session.is_complete():
+        status_label = "Complete"
+
+    progress = session.current_round / session.max_rounds if session.max_rounds else 0.0
+    st.progress(min(progress, 1.0), text=f"Round {session.current_round + 1} / {session.max_rounds}")
+
+    st.metric("Session", session.name)
+    st.metric("Round", f"{session.current_round} / {session.max_rounds}")
+    st.metric("Status", status_label)
+    st.metric("Dry Run", "Yes" if session.is_dry_run else "No")
+    st.metric("Agents", len(session.agents))
+    if active_agent:
+        st.markdown(
+            f"<div class='active-agent'>{icon('cpu', 16)} "
+            f"<b>Active:</b> {active_agent.name} ({active_agent.role.value})</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _render_empty_state() -> None:
+    """Render the onboarding card shown when no session is active."""
+    st.markdown(
+        f"""
+        <div class="empty-state">
+          <div class="empty-state-icon">{icon('sparkles', 36)}</div>
+          <h3>No active session yet</h3>
+          <p>Configure your agents in the sidebar, write an initial prompt, then hit Start.</p>
+          <p class="empty-state-tip">{icon('info', 14)} Dry-run mode is a great way to test the
+             loop without burning API credits.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _maybe_autorefresh(orchestrator: Orchestrator) -> None:
+    """If a session is running, schedule a rerun every 2s to refresh the UI.
+
+    The 2-second cadence is a compromise: short enough to feel live, long
+    enough that Streamlit's render cost doesn't dominate.
+    """
+    if orchestrator.is_loop_alive():
+        try:
+            from streamlit_autorefresh import st_autorefresh  # type: ignore
+
+            st_autorefresh(interval=2000, key="arena_autorefresh")
+        except ImportError:
+            # Fallback: ask JS to reload. Less reliable but no dependency.
+            st.markdown(
+                "<script>setTimeout(()=>window.location.reload(),2000)</script>",
+                unsafe_allow_html=True,
+            )
+
+
 def render_app() -> None:
     """Main entry point for the Streamlit application."""
     st.set_page_config(
         page_title=config.app_name,
-        page_icon="🤖",
+        page_icon=str(_FAVICON) if _FAVICON.exists() else "🛰",
         layout="wide",
         initial_sidebar_state="expanded",
     )
 
-    # Dark theme CSS
     st.markdown(
-        """
+        f"""
         <style>
-        .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
+        {css_variables_block()}
 
-        /* Hero banner */
-        .hero {
-            background: linear-gradient(120deg,#1f2a52 0%,#3a2b63 55%,#5a2d52 100%);
+        .block-container {{padding-top: 1.5rem; padding-bottom: 2rem;}}
+
+        .hero {{
+            background: linear-gradient(120deg,
+                var(--accent-hero-start) 0%,
+                var(--accent-hero-mid)   55%,
+                var(--accent-hero-end)   100%);
             border-radius: 16px; padding: 18px 26px; margin-bottom: 14px;
-            color: #f4f1ea; box-shadow: 0 6px 22px #00000038;
-        }
-        .hero h1 {margin: 0; font-size: 1.55rem; letter-spacing: .2px;}
-        .hero p {margin: 4px 0 0; opacity: .82; font-size: .92rem;}
+            color: var(--text-primary); box-shadow: 0 6px 22px #00000038;
+            display: flex; align-items: center; gap: 16px;
+        }}
+        .hero h1 {{margin: 0; font-size: 1.55rem; letter-spacing: .2px;
+                   display:flex; gap:10px; align-items:center;}}
+        .hero p {{margin: 4px 0 0; opacity: .82; font-size: .92rem;}}
+        .hero .hero-icon {{color: var(--accent-purple); flex-shrink: 0;}}
 
-        /* Metric cards */
-        div[data-testid="stMetric"] {
-            background: #ffffff0a; border: 1px solid #ffffff1f;
+        div[data-testid="stMetric"] {{
+            background: var(--overlay-1); border: 1px solid var(--overlay-3);
             border-radius: 12px; padding: 10px 14px;
-        }
-        div[data-testid="stMetric"] label {opacity: .7; font-size: .78rem;}
+        }}
+        div[data-testid="stMetric"] label {{opacity: .7; font-size: .78rem;}}
 
-        /* Buttons */
-        .stButton > button, .stDownloadButton > button {
+        .stButton > button, .stDownloadButton > button {{
             padding: .34rem .85rem; font-size: .88rem; font-weight: 600;
             border-radius: 9px; min-height: 44px; line-height: 1.25;
-            border: 1px solid #ffffff26; transition: all .12s ease;
-        }
-        .stButton > button:hover, .stDownloadButton > button:hover {
-            border-color: #ffffff55; transform: translateY(-1px);
-        }
-        .stButton > button[kind="primary"] {
-            background: linear-gradient(120deg,#3a2b63,#5a2d52);
-            border-color: #ffffff55;
-        }
+            border: 1px solid var(--overlay-4); transition: all .12s ease;
+            display: inline-flex; align-items: center; gap: 6px;
+        }}
+        .stButton > button:hover, .stDownloadButton > button:hover {{
+            border-color: var(--overlay-5); transform: translateY(-1px);
+        }}
+        .stButton > button[kind="primary"] {{
+            background: linear-gradient(120deg,
+                var(--accent-primary), var(--accent-secondary));
+            border-color: var(--overlay-5);
+        }}
 
-        /* Chat bubbles */
-        .chat-bubble {
-            background: #1e293b; border: 1px solid #334155;
+        /* Chat bubbles (consumed by chat_panel). */
+        .chat-bubble {{
+            background: var(--bg-surface); border: 1px solid var(--border-soft);
             border-radius: 12px; padding: 12px 16px; margin-bottom: 8px;
-        }
-        .chat-bubble.tool-call {
-            border-left: 3px solid #f59e0b;
-            background: #1a2332;
-        }
-        .chat-bubble.error {
-            border-left: 3px solid #ef4444;
-            background: #1a1215;
-        }
-        .chat-bubble.warning {
-            border-left: 3px solid #f59e0b;
-            background: #1a1a12;
-        }
+        }}
+        .chat-bubble.tool-call {{border-left: 3px solid var(--status-warning);
+                                 background: var(--bg-elevated);}}
+        .chat-bubble.error    {{border-left: 3px solid var(--status-error);
+                                 background: var(--bg-error);}}
+        .chat-bubble.warning  {{border-left: 3px solid var(--status-warning);
+                                 background: var(--bg-warning);}}
+        .chat-bubble.system   {{border-left: 3px solid var(--border-strong);
+                                 background: var(--bg-base);}}
 
-        /* Progress bar */
-        .stProgress > div > div > div > div {
-            background: linear-gradient(90deg, #3a2b63, #5a2d52);
-        }
+        /* Empty state card. */
+        .empty-state {{
+            text-align: center; padding: 40px 24px;
+            background: var(--overlay-1); border: 1px dashed var(--overlay-3);
+            border-radius: 16px; color: var(--text-muted);
+        }}
+        .empty-state h3 {{margin: 12px 0 4px; color: var(--text-primary);}}
+        .empty-state p  {{margin: 4px 0; font-size: .92rem;}}
+        .empty-state-icon {{color: var(--accent-purple);}}
+        .empty-state-tip  {{font-size: .8rem; opacity: .7; margin-top: 14px;}}
 
-        /* Expander */
-        .streamlit-expanderHeader {
-            background: #1e293b !important;
+        /* Active agent indicator in the metrics column. */
+        .active-agent {{
+            background: var(--bg-surface); border: 1px solid var(--border-soft);
+            border-radius: 10px; padding: 8px 12px; margin-top: 8px;
+            display: flex; gap: 6px; align-items: center; color: var(--text-primary);
+        }}
+
+        /* Sidebar section headers (icons injected from Python). */
+        .sidebar-section {{display:flex; align-items:center; gap:6px;
+                           color: var(--accent-purple);}}
+
+        /* Bubble internals. */
+        .bubble-head   {{font-size:.85rem; color: var(--text-muted);
+                         margin-bottom:6px;}}
+        .bubble-time   {{opacity:.6; font-weight:400;}}
+        .bubble-live   {{color: var(--accent-purple); margin-left:6px;
+                         font-size:.7rem; background: var(--accent-indigo);
+                         padding:1px 6px; border-radius:6px;}}
+        .bubble-text   {{color: var(--text-primary); line-height:1.55;}}
+        .bubble-pre    {{background: var(--bg-base); color: var(--text-faint);
+                         padding:8px 10px; border-radius:6px;
+                         border:1px solid var(--border-soft);
+                         font-size:.78rem; white-space:pre-wrap; margin:6px 0 0;}}
+        .bubble-error-text   {{color: var(--text-error); font-weight:500;}}
+        .bubble-warning-text {{color: var(--text-warning); font-weight:500;}}
+        .bubble-tool-summary {{color: var(--text-warning); font-size:.78rem;
+                              margin:4px 0 6px;
+                              display:flex; align-items:center; gap:4px;}}
+
+        /* Tool card in sidebar. */
+        .tool-card       {{background: var(--bg-tool-card);
+                          border:1px solid var(--border-soft);
+                          border-radius:8px; padding:8px 10px; margin:6px 0;}}
+        .tool-card-name  {{color: var(--accent-purple); font-weight:600;
+                          font-size:.85rem;
+                          display:flex; align-items:center; gap:4px;}}
+        .tool-card-desc  {{color: var(--text-muted); font-size:.78rem;
+                          margin-top:3px;}}
+
+        .stProgress > div > div > div > div {{
+            background: linear-gradient(90deg,
+                var(--accent-primary), var(--accent-secondary));
+        }}
+
+        .streamlit-expanderHeader {{
+            background: var(--bg-surface) !important;
             border-radius: 8px !important;
-        }
+        }}
 
-        /* Code blocks */
-        pre {
-            background: #0f172a !important;
+        pre {{
+            background: var(--bg-base) !important;
             border-radius: 8px !important;
-            border: 1px solid #334155 !important;
-        }
+            border: 1px solid var(--border-soft) !important;
+        }}
 
-        hr {margin: .9rem 0; border-color: #ffffff14;}
-        footer {visibility: hidden;}
+        hr {{margin: .9rem 0; border-color: var(--overlay-2);}}
+        footer {{visibility: hidden;}}
 
-        /* Reduced motion */
-        @media (prefers-reduced-motion: reduce) {
-            .stButton > button, .stDownloadButton > button {
-                transition: none !important;
-                transform: none !important;
-            }
-        }
+        @media (prefers-reduced-motion: reduce) {{
+            .stButton > button, .stDownloadButton > button {{
+                transition: none !important; transform: none !important;
+            }}
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -276,8 +382,11 @@ def render_app() -> None:
     st.markdown(
         f"""
         <div class="hero">
-          <h1>🤖 {config.app_name} <span style="opacity:.5;font-size:1rem">v{config.version}</span></h1>
-          <p>Multi-AI orchestration platform — agents collaborate on a shared context</p>
+          <span class="hero-icon">{icon('bot', 36)}</span>
+          <div>
+            <h1>{config.app_name} <span style="opacity:.5;font-size:1rem">v{config.version}</span></h1>
+            <p>Multi-AI orchestration platform — agents collaborate on a shared context</p>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -288,57 +397,71 @@ def render_app() -> None:
     orchestrator = _get_orchestrator()
     session_manager = _get_session_manager()
 
-    # Config panel
-    config_values = render_config_panel(orchestrator, session_manager)
+    render_config_panel(orchestrator, session_manager)
 
     # Initial prompt
-    with st.expander("Initial Prompt", expanded=True):
-        initial_prompt = st.text_area(
+    with st.expander(f"{icon('message', 16)} Initial Prompt", expanded=True):
+        st.text_area(
             "Enter the initial prompt for the first agent",
             value=st.session_state.get("initial_prompt", ""),
             height=150,
             key="initial_prompt",
+            placeholder="e.g. Discuss the future of AI collaboration, with one critic and one optimist.",
         )
 
-    # Active session
+    # Resolve the active session. After a rerun, ``session_manager`` reloaded
+    # from disk, so the session returned here is the persisted one.
     session = session_manager.get_active_session()
     if not session and st.session_state.get("current_session_id"):
         session = session_manager.get_session(st.session_state["current_session_id"])
 
-    # Control buttons
     render_control_buttons(orchestrator, session)
 
-    # Display last error if any
-    if st.session_state.get("last_error"):
-        st.error(st.session_state["last_error"])
+    # Surface background-loop errors without blocking the rest of the render.
+    loop_error = _consume_loop_error(orchestrator)
+    if loop_error:
+        st.error(f"Background loop stopped: {loop_error}")
 
-    # Loading indicator
-    if session and session.is_running:
-        st.spinner("Session running...")
+    # Auto-refresh while a session is alive so the user sees live progress.
+    if session and orchestrator.is_loop_alive():
+        st.markdown(
+            f"<div class='active-agent'>{icon('refresh', 14)} "
+            f"<b>Live:</b> {session.get_current_agent().name if session.get_current_agent() else '...'} "
+            f"is working — UI auto-refreshes every 2s.</div>",
+            unsafe_allow_html=True,
+        )
+        _maybe_autorefresh(orchestrator)
 
-    # Three-column layout (responsive on mobile)
+    # Three-column layout.
     col_chat, col_center, col_context = st.columns([1, 1, 1], gap="medium")
 
     with col_chat:
         if session:
-            render_chat_panel(session.messages, session.get_current_agent() if session.is_running else None)
+            render_chat_panel(
+                session.messages,
+                session.get_current_agent() if session.is_running else None,
+            )
         else:
-            st.info("No active session.")
+            _render_empty_state()
 
     with col_center:
         if session:
-            st.metric("Session", session.name)
-            st.metric("Round", f"{session.current_round} / {session.max_rounds}")
-            st.metric("Status", "Running" if session.is_running else ("Paused" if session.is_paused else "Idle"))
-            st.metric("Dry Run", "Yes" if session.is_dry_run else "No")
-            st.metric("Agents", len(session.agents))
-            if session.summary_agent:
-                st.metric("Summary Agent", session.summary_agent.name)
+            _render_metrics(session)
         else:
-            st.info("No active session.")
+            st.markdown(_empty_metrics_html(), unsafe_allow_html=True)
 
     with col_context:
         if session:
             render_context_panel(session, orchestrator)
         else:
-            st.info("No active session.")
+            _render_empty_state()
+
+
+def _empty_metrics_html() -> str:
+    return (
+        f"<div class='empty-state' style='padding:24px;'>"
+        f"<div class='empty-state-icon'>{icon('sliders', 28)}</div>"
+        f"<h3>Status panel</h3>"
+        f"<p>Session status will appear here once you create one.</p>"
+        f"</div>"
+    )

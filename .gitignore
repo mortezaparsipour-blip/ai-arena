@@ -39,7 +39,7 @@ horse-ai-explainer/model/
 
 # Misc
 screen_shot/
-.streamlit/
+.streamlit/secrets.toml
 .claude/
 .kilo/
 dist/
@@ -58,6 +58,9 @@ pytest_cache/
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Runtime data (created by the orchestrator, not source)
+contexts/
 
 # Generated docs - not tracked in git
 QUICKSTART.md

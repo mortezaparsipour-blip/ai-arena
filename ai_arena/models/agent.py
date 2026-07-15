@@ -25,8 +25,9 @@ class Agent:
         provider: Provider name (e.g., 'openai', 'anthropic').
         model: Model identifier (e.g., 'gpt-4', 'claude-3-opus').
         api_key: API key for the provider.
+        max_tokens: Maximum tokens to request from the model per call.
         color: Display color for UI differentiation.
-        enabled: Whether this agent is active in the loop.
+        enabled: Whether this agent is active in the loop. Defaults to True.
     """
 
     id: str
@@ -36,6 +37,7 @@ class Agent:
     provider: str = "openai"
     model: str = "gpt-4"
     api_key: str = ""
+    max_tokens: int = 10000
     color: str = "#6366f1"
     enabled: bool = True
 
@@ -49,6 +51,7 @@ class Agent:
             "provider": self.provider,
             "model": self.model,
             "api_key": self.api_key,
+            "max_tokens": self.max_tokens,
             "color": self.color,
             "enabled": self.enabled,
         }
@@ -65,6 +68,7 @@ class Agent:
             provider=data.get("provider", "openai"),
             model=data.get("model", "gpt-4"),
             api_key=data.get("api_key", ""),
+            max_tokens=int(data.get("max_tokens", 10000)),
             color=data.get("color", "#6366f1"),
             enabled=data.get("enabled", True),
         )

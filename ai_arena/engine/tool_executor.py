@@ -7,6 +7,8 @@ and wraps results in envelopes for AI consumption.
 from __future__ import annotations
 
 import json
+import logging
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +18,11 @@ from ..config import config
 from ..engine.tool_registry import ToolRegistry, tool_registry
 from ..tools.base import ToolError, ToolResult
 from .tool_parser import ToolCall, ToolCallParseError, has_tool_call, parse_tool_call
+
+
+# Module-level logger so audit-log IO failures are visible in the console
+# (and therefore in Streamlit logs) instead of being silently swallowed.
+_log = logging.getLogger("ai_arena.audit")
 
 
 class ToolExecutorError(Exception):
@@ -100,8 +107,12 @@ class AuditLogger:
         try:
             with self.log_path.open("a", encoding="utf-8") as f:
                 f.write(entry + "\n")
-        except Exception:
-            pass
+        except OSError as exc:
+            # Surface the failure: a full disk or permission error should
+            # never be invisible. ``sys.stderr`` is captured by Streamlit
+            # so the operator can still see it in the server log.
+            _log.error("audit log write failed for %s: %s", self.log_path, exc)
+            print(f"[audit-log] {exc}", file=sys.stderr)
 
     def log_tool_call(self, tool_call: ToolCall, attempt: int) -> None:
         """Log a tool call attempt."""
