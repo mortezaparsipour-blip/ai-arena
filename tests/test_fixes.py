@@ -164,14 +164,14 @@ def test_agent_max_tokens_round_trip() -> None:
     # Default value still works when the caller doesn't set it.
     b = Agent(id="y", name="Y", role=AgentRole.CUSTOM, system_prompt="",
               provider="openai", model="gpt-4o", api_key="")
-    assert b.max_tokens == 10000
+    assert b.max_tokens == 20000
     # Serialization preserves the field.
     data = a.to_dict()
     assert data["max_tokens"] == 4096
     # And from_dict restores it (even on older payloads that lack the key).
     legacy = {k: v for k, v in data.items() if k != "max_tokens"}
     restored = Agent.from_dict(legacy)
-    assert restored.max_tokens == 10000
+    assert restored.max_tokens == 20000
     restored_with_value = Agent.from_dict(data)
     assert restored_with_value.max_tokens == 4096
     print("Agent max_tokens round-trip OK")

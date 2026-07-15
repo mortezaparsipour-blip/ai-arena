@@ -71,7 +71,7 @@ class CerebrasProvider(BaseProvider):
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                max_tokens=kwargs.pop("max_tokens", 10000),
+                max_tokens=kwargs.pop("max_tokens", 20000),
                 **kwargs,
             )
             # Type-safe extraction: response.choices[0].message.content

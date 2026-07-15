@@ -37,7 +37,7 @@ class Agent:
     provider: str = "openai"
     model: str = "gpt-4"
     api_key: str = ""
-    max_tokens: int = 10000
+    max_tokens: int = 20000
     color: str = "#6366f1"
     enabled: bool = True
 
@@ -68,7 +68,7 @@ class Agent:
             provider=data.get("provider", "openai"),
             model=data.get("model", "gpt-4"),
             api_key=data.get("api_key", ""),
-            max_tokens=int(data.get("max_tokens", 10000)),
+            max_tokens=int(data.get("max_tokens", 20000)),
             color=data.get("color", "#6366f1"),
             enabled=data.get("enabled", True),
         )
