@@ -480,6 +480,7 @@ class Orchestrator:
 
     def pause_session(self, session: SessionState) -> None:
         """Pause the orchestration loop."""
+        self._stop_event = True
         session.is_paused = True
         session.is_running = False
         self.session_manager._save_session(session)
@@ -524,7 +525,7 @@ class Orchestrator:
         """
         self._set_loop_running(True)
         try:
-            while session.is_running and not session.is_paused:
+            while session.is_running and not session.is_paused and not self._stop_event:
                 if session.is_complete():
                     session.is_running = False
                     break
