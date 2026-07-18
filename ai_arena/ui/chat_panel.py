@@ -90,10 +90,27 @@ def render_chat_panel(messages: list[Message], current_agent: Any | None) -> Non
         messages: List of messages in the conversation.
         current_agent: The currently active agent, if any.
     """
-    st.header("Conversation")
+    # Compact header with a count badge so the user can see at a glance how
+    # much conversation has accumulated.
+    count = len(messages)
+    st.markdown(
+        f"<div class='panel-header'>"
+        f"<span class='panel-title'>{icon('message', 18)} Conversation</span>"
+        f"<span class='panel-count'>{count}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
     if not messages:
-        st.info("No messages yet. Configure agents and start a session.")
+        st.markdown(
+            "<div class='chat-empty'>"
+            "<div class='chat-empty-icon'>💬</div>"
+            "<p>No messages yet.</p>"
+            "<p class='chat-empty-cta'>Configure agents in the sidebar, "
+            "then hit <b>Start</b> below.</p>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
         return
 
     for msg in messages:

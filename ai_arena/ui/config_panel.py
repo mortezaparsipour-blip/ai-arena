@@ -59,6 +59,26 @@ def _render_tools_panel() -> None:
             )
 
 
+def _api_key_status(provider_name: str, value: str) -> str:
+    """Return a small HTML chip describing whether the API key field is filled.
+
+    Renders ``✓ using .env key`` if the value came from the env fallback,
+    ``✓ key set`` if the user typed one, or ``⚠ enter key`` otherwise.
+    """
+    env_key = config.get_api_key(provider_name)
+    if value.strip():
+        # If the field value equals the env fallback, attribute it to .env.
+        source = "using .env key" if value == env_key else "key set"
+        return (
+            f"<span class='key-ok'>{icon('check', 12)} {source}</span>"
+        )
+    if env_key:
+        return (
+            f"<span class='key-ok'>{icon('check', 12)} using .env key</span>"
+        )
+    return f"<span class='key-warn'>{icon('alert', 12)} enter key</span>"
+
+
 def render_config_panel(
     orchestrator: Any,
     session_manager: Any,
@@ -71,10 +91,11 @@ def render_config_panel(
         so the call site can construct a session from the same agents the
         user just configured.
     """
-    st.sidebar.header("Configuration")
+    _sidebar_header("Configuration", "sliders_horizontal")
 
     providers = get_available_providers()
 
+    # --- Step 1: Setup (Global Settings + Agents) --------------------------
     with st.sidebar.expander("Global Settings", icon="⚙", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -115,12 +136,14 @@ def render_config_panel(
         )
 
     with st.sidebar.expander("Agents", icon="👥", expanded=False):
-        agent_count = st.number_input(
+        # Slider gives a more glanceable control than a bare number input.
+        agent_count = st.slider(
             "Number of agents",
             min_value=1,
             max_value=6,
             value=st.session_state.get("agent_count", 2),
             key="agent_count",
+            help="Each agent takes a turn on the shared context, then hands off.",
         )
 
         sys_prompts = config.get_sys_prompts()
@@ -130,82 +153,95 @@ def render_config_panel(
         colors = AGENT_PALETTE
 
         for i in range(agent_count):
-            st.subheader(f"Agent {i + 1}")
-            col1, col2 = st.columns(2)
-            with col1:
-                name = st.text_input(
-                    "Name",
-                    value=st.session_state.get(f"agent_name_{i}", f"Agent {chr(65+i)}"),
-                    key=f"agent_name_{i}",
-                )
-            with col2:
-                provider_name = st.selectbox(
-                    "Provider",
-                    options=list(providers.keys()),
-                    index=list(providers.keys()).index(
-                        st.session_state.get(f"agent_provider_{i}", "openai")
-                    ),
-                    key=f"agent_provider_{i}",
-                )
-                provider = providers.get(provider_name, OpenAIProvider())
+            # Agent card: a bordered sub-container so each agent reads as a
+            # unit rather than a stream of inputs.
+            st.markdown(
+                f"<div class='agent-card-header'>"
+                f"<span class='agent-card-dot' style='background:{colors[i % len(colors)]}'></span>"
+                f"Agent {i + 1}</div>",
+                unsafe_allow_html=True,
+            )
+            with st.container(border=True):
+                col1, col2 = st.columns(2)
+                with col1:
+                    name = st.text_input(
+                        "Name",
+                        value=st.session_state.get(f"agent_name_{i}", f"Agent {chr(65+i)}"),
+                        key=f"agent_name_{i}",
+                    )
+                with col2:
+                    provider_name = st.selectbox(
+                        "Provider",
+                        options=list(providers.keys()),
+                        index=list(providers.keys()).index(
+                            st.session_state.get(f"agent_provider_{i}", "openai")
+                        ),
+                        key=f"agent_provider_{i}",
+                    )
+                    provider = providers.get(provider_name, OpenAIProvider())
 
-            current_model = st.session_state.get(f"agent_model_{i}", provider.default_model)
-            model_index = (
-                provider.available_models.index(current_model)
-                if current_model in provider.available_models
-                else 0
-            )
-            model = st.selectbox(
-                "Model",
-                options=provider.available_models,
-                index=model_index,
-                key=f"agent_model_{i}",
-            )
-            api_key = st.text_input(
-                "API Key",
-                value=st.session_state.get(f"agent_api_key_{i}", "")
-                or config.get_api_key(provider_name),
-                type="password",
-                key=f"agent_api_key_{i}",
-                help=f"Falls back to {provider_name.upper()}_API_KEY from .env if empty.",
-            )
-            max_tokens = st.number_input(
-                "Max tokens",
-                min_value=64,
-                max_value=200000,
-                value=int(st.session_state.get(f"agent_max_tokens_{i}", 10000)),
-                step=256,
-                key=f"agent_max_tokens_{i}",
-                help="Max tokens requested from the model per call. "
-                     "Bump up for long responses, down to save cost.",
-            )
-
-            current_prompt = st.session_state.get(f"agent_prompt_{i}", "custom")
-            prompt_index = (
-                prompt_names.index(current_prompt)
-                if current_prompt in prompt_names
-                else len(prompt_names) - 1
-            )
-            prompt_option = st.selectbox(
-                "System prompt",
-                options=prompt_names,
-                index=prompt_index,
-                key=f"agent_prompt_{i}",
-            )
-
-            if prompt_option == "custom":
-                system_prompt = st.text_area(
-                    "Custom prompt",
-                    value=st.session_state.get(f"agent_custom_prompt_{i}", ""),
-                    height=100,
-                    key=f"agent_custom_prompt_{i}",
+                current_model = st.session_state.get(f"agent_model_{i}", provider.default_model)
+                model_index = (
+                    provider.available_models.index(current_model)
+                    if current_model in provider.available_models
+                    else 0
                 )
-            else:
-                try:
-                    system_prompt = config.load_sys_prompt(prompt_option)
-                except FileNotFoundError:
-                    system_prompt = ""
-                st.caption(f"Loaded: {prompt_option}.md")
+                model = st.selectbox(
+                    "Model",
+                    options=provider.available_models,
+                    index=model_index,
+                    key=f"agent_model_{i}",
+                )
+                api_key = st.text_input(
+                    "API Key",
+                    value=st.session_state.get(f"agent_api_key_{i}", "")
+                    or config.get_api_key(provider_name),
+                    type="password",
+                    key=f"agent_api_key_{i}",
+                    help=f"Falls back to {provider_name.upper()}_API_KEY from .env if empty.",
+                )
+                # Inline micro-feedback on the key status.
+                st.markdown(
+                    _api_key_status(provider_name, api_key),
+                    unsafe_allow_html=True,
+                )
+                max_tokens = st.number_input(
+                    "Max tokens",
+                    min_value=64,
+                    max_value=200000,
+                    value=int(st.session_state.get(f"agent_max_tokens_{i}", 10000)),
+                    step=256,
+                    key=f"agent_max_tokens_{i}",
+                    help="Max tokens requested from the model per call. "
+                         "Bump up for long responses, down to save cost.",
+                )
+
+                current_prompt = st.session_state.get(f"agent_prompt_{i}", "custom")
+                prompt_index = (
+                    prompt_names.index(current_prompt)
+                    if current_prompt in prompt_names
+                    else len(prompt_names) - 1
+                )
+                prompt_option = st.selectbox(
+                    "System prompt",
+                    options=prompt_names,
+                    index=prompt_index,
+                    key=f"agent_prompt_{i}",
+                )
+
+                if prompt_option == "custom":
+                    system_prompt = st.text_area(
+                        "Custom prompt",
+                        value=st.session_state.get(f"agent_custom_prompt_{i}", ""),
+                        height=100,
+                        key=f"agent_custom_prompt_{i}",
+                    )
+                else:
+                    try:
+                        system_prompt = config.load_sys_prompt(prompt_option)
+                    except FileNotFoundError:
+                        system_prompt = ""
+                    st.caption(f"Loaded: {prompt_option}.md")
 
             role = AgentRole.CUSTOM
             if i == 0:
@@ -225,9 +261,9 @@ def render_config_panel(
                 color=colors[i % len(colors)],
             ))
 
-    _render_tools_panel()
-
-    with st.sidebar.expander("Sessions", icon="📂", expanded=False):
+    # --- Step 2: Sessions (promoted near the top — this is what creates
+    #     the thing the rest of the UI operates on) -------------------------
+    with st.sidebar.expander("Sessions", icon="📂", expanded=True):
         sessions = session_manager.list_sessions()
         session_options = ["New Session"] + [f"{s['name']} ({s['id']})" for s in sessions]
         selected = st.selectbox(
@@ -266,6 +302,9 @@ def render_config_panel(
             )
             st.session_state["current_session_id"] = session.id
             st.rerun()
+
+    # --- Step 3: Tools (read-only reference, collapsed) --------------------
+    _render_tools_panel()
 
     return {
         "agents": agents,

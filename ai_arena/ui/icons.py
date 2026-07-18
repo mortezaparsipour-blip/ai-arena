@@ -120,6 +120,38 @@ ICONS: dict[str, str] = {
         '<path d="M10 11v6M14 11v6"/>'
         '<path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>'
     ),
+    "check_circle": _wrap(
+        '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>'
+        '<polyline points="22 4 12 14.01 9 11.01"/>'
+    ),
+    "play_circle": _wrap(
+        '<circle cx="12" cy="12" r="10"/>'
+        '<polygon points="10 8 16 12 10 16 10 8"/>'
+    ),
+    "circle": _wrap('<circle cx="12" cy="12" r="10"/>'),
+    "flag": _wrap(
+        '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/>'
+        '<line x1="4" x2="4" y1="22" y2="15"/>'
+    ),
+    "sliders_horizontal": _wrap(
+        '<line x1="21" x2="14" y1="5" y2="5"/>'
+        '<line x1="10" x2="3" y1="5" y2="5"/>'
+        '<line x1="21" x2="12" y1="12" y2="12"/>'
+        '<line x1="8" x2="3" y1="12" y2="12"/>'
+        '<line x1="21" x2="16" y1="19" y2="19"/>'
+        '<line x1="12" x2="3" y1="19" y2="19"/>'
+        '<line x1="14" x2="14" y1="3" y2="7"/>'
+        '<line x1="8" x2="8" y1="10" y2="14"/>'
+        '<line x1="16" x2="16" y1="17" y2="21"/>'
+    ),
+    "activity": _wrap(
+        '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>'
+    ),
+    "archive": _wrap(
+        '<rect x="2" y="3" width="20" height="5" rx="1"/>'
+        '<path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/>'
+        '<line x1="10" x2="14" y1="12" y2="12"/>'
+    ),
 }
 
 

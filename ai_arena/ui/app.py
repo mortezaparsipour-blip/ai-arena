@@ -29,6 +29,7 @@ from .chat_panel import render_chat_panel
 from .config_panel import render_config_panel
 from .context_panel import render_context_panel
 from .icons import icon
+from .stepper import compute_step, render_step_indicator
 from .tokens import css_variables_block
 
 
@@ -96,8 +97,90 @@ def _consume_loop_error(orchestrator: Orchestrator) -> str | None:
     return orchestrator.consume_last_error()
 
 
+def _session_status(session: SessionState, orchestrator: Orchestrator) -> str:
+    """Return a short status keyword for the active session.
+
+    One of: ``running``, ``paused``, ``complete``, ``idle``.
+    """
+    loop_alive = orchestrator.is_loop_alive()
+    if session.is_complete():
+        return "complete"
+    if session.is_running and loop_alive:
+        return "running"
+    if session.is_paused:
+        return "paused"
+    return "idle"
+
+
+def _status_pill(status: str) -> str:
+    """Return an HTML status pill for the given status keyword."""
+    label = {
+        "running":  ("● Running",   "run"),
+        "paused":   ("⏸ Paused",    "pause"),
+        "complete": ("✓ Complete",  "done"),
+        "idle":     ("○ Idle",      "idle"),
+    }.get(status, ("○ Idle", "idle"))
+    text, cls = label
+    return f"<span class='status-pill {cls}'>{text}</span>"
+
+
+def _render_status_bar(session: SessionState | None, orchestrator: Orchestrator) -> None:
+    """Render the top status strip: progress, status pill, round + agent counts.
+
+    Replaces the old center-column metrics block. When no session is active,
+    renders a muted placeholder so the bar keeps its height and the layout
+    doesn't jump when a session is created.
+    """
+    if session is None:
+        st.markdown(
+            "<div class='status-bar'>"
+            "<span class='status-bar-muted'>No active session — create one in the sidebar.</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    status = _session_status(session, orchestrator)
+    progress = session.current_round / session.max_rounds if session.max_rounds else 0.0
+    active = session.get_current_agent() if session.is_running else None
+
+    # Pre-render the optional chips so the f-string below stays backslash-free
+    # (Python <3.12 disallows backslashes inside f-string expressions).
+    dry_run_chip = (
+        "<span class='status-bar-meta'>DRY-RUN</span>"
+        if session.is_dry_run else ""
+    )
+    active_chip = (
+        f"{icon('cpu', 14)} {active.name}" if active else ""
+    )
+
+    # Left: status pill + session name. Right: round/agent counts.
+    st.markdown(
+        f"<div class='status-bar'>"
+        f"<div class='status-bar-left'>"
+        f"{_status_pill(status)}"
+        f"<span class='status-bar-name'>{icon('archive', 14)} {session.name}</span>"
+        f"<span class='status-bar-meta'>{icon('users', 14)} {len(session.agents)} agents</span>"
+        f"<span class='status-bar-meta'>{icon('activity', 14)} "
+        f"Round {session.current_round + 1} / {session.max_rounds}</span>"
+        f"{dry_run_chip}"
+        f"</div>"
+        f"<div class='status-bar-right'>{active_chip}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    st.progress(
+        min(progress, 1.0),
+        text=f"Round {session.current_round + 1} / {session.max_rounds}",
+    )
+
+
 def render_control_buttons(orchestrator: Orchestrator, session: SessionState | None) -> None:
-    """Render start, pause, resume, stop, and export buttons."""
+    """Render the playback control cluster (Start/Pause/Resume/Stop).
+
+    Returned separately from the run bar so callers can place the cluster
+    wherever they like. The export button lives in the run bar itself.
+    """
     if not session:
         return
 
@@ -116,6 +199,7 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
             disabled=running,
             key="btn_start",
             help="Start the orchestration loop",
+            use_container_width=True,
         ):
             initial_prompt = st.session_state.get("initial_prompt", "").strip()
             if not initial_prompt:
@@ -132,6 +216,7 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
             disabled=not running,
             key="btn_pause",
             help="Pause after the current step",
+            use_container_width=True,
         ):
             orchestrator.pause_session(session)
             st.rerun()
@@ -143,6 +228,7 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
             disabled=not paused,
             key="btn_resume",
             help="Resume a paused session",
+            use_container_width=True,
         ):
             orchestrator.resume_session(session)
             orchestrator.start_background(session)
@@ -155,11 +241,48 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
             disabled=not (running or paused),
             key="btn_stop",
             help="Stop the orchestration loop",
+            use_container_width=True,
         ):
             orchestrator.stop_session(session)
             st.rerun()
 
-    _render_export_button(session)
+
+def _render_run_bar(orchestrator: Orchestrator, session: SessionState | None) -> None:
+    """Render the bottom run bar: prompt area on the left, controls + export
+    on the right. The prompt is only editable when nothing is running; while
+    a session is live the cluster shows the playback controls.
+    """
+    st.markdown("<div class='run-bar-divider'></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='run-bar-label'>{icon('message', 14)} Run</div>",
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns([3, 2], gap="medium")
+
+    with left:
+        # Prompt area is the primary affordance; keep it always visible.
+        st.text_area(
+            "Initial prompt",
+            value=st.session_state.get("initial_prompt", ""),
+            height=90,
+            key="initial_prompt",
+            placeholder="e.g. Discuss the future of AI collaboration, "
+            "with one critic and one optimist.",
+            label_visibility="collapsed",
+        )
+
+    with right:
+        if session:
+            render_control_buttons(orchestrator, session)
+            _render_export_button(session)
+        else:
+            st.markdown(
+                "<div class='chat-empty' style='padding:12px;'>"
+                "Create a session to enable Start / Pause / Stop."
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
 
 def _render_export_button(session: SessionState) -> None:
@@ -187,40 +310,14 @@ def _render_export_button(session: SessionState) -> None:
 
     content = "\n".join(lines)
     st.download_button(
-        label="Export Session",
+        label="Export",
         icon="⬇",
         data=content,
         file_name=f"ai_arena_session_{session.id}.md",
         mime="text/markdown",
         key="btn_export",
+        use_container_width=True,
     )
-
-
-def _render_metrics(session: SessionState) -> None:
-    """Render the center status column with metrics and progress."""
-    active_agent = session.get_current_agent() if session.is_running else None
-    status_label = "Idle"
-    if session.is_running:
-        status_label = "Running"
-    elif session.is_paused:
-        status_label = "Paused"
-    elif session.is_complete():
-        status_label = "Complete"
-
-    progress = session.current_round / session.max_rounds if session.max_rounds else 0.0
-    st.progress(min(progress, 1.0), text=f"Round {session.current_round + 1} / {session.max_rounds}")
-
-    st.metric("Session", session.name)
-    st.metric("Round", f"{session.current_round} / {session.max_rounds}")
-    st.metric("Status", status_label)
-    st.metric("Dry Run", "Yes" if session.is_dry_run else "No")
-    st.metric("Agents", len(session.agents))
-    if active_agent:
-        st.markdown(
-            f"<div class='active-agent'>{icon('cpu', 16)} "
-            f"<b>Active:</b> {active_agent.name} ({active_agent.role.value})</div>",
-            unsafe_allow_html=True,
-        )
 
 
 def _render_empty_state() -> None:
@@ -279,13 +376,13 @@ def render_app() -> None:
                 var(--accent-hero-start) 0%,
                 var(--accent-hero-mid)   55%,
                 var(--accent-hero-end)   100%);
-            border-radius: 16px; padding: 18px 26px; margin-bottom: 14px;
-            color: var(--text-primary); box-shadow: 0 6px 22px #00000038;
-            display: flex; align-items: center; gap: 16px;
+            border-radius: 12px; padding: 12px 20px; margin-bottom: var(--space-3);
+            color: var(--text-primary); box-shadow: 0 4px 16px #00000038;
+            display: flex; align-items: center; gap: var(--space-3);
         }}
-        .hero h1 {{margin: 0; font-size: 1.55rem; letter-spacing: .2px;
+        .hero h1 {{margin: 0; font-size: 1.3rem; letter-spacing: .2px;
                    display:flex; gap:10px; align-items:center;}}
-        .hero p {{margin: 4px 0 0; opacity: .82; font-size: .92rem;}}
+        .hero p {{margin: 2px 0 0; opacity: .82; font-size: .85rem;}}
         .hero .hero-icon {{color: var(--accent-purple); flex-shrink: 0;}}
 
         div[data-testid="stMetric"] {{
@@ -414,10 +511,140 @@ def render_app() -> None:
         hr {{margin: .9rem 0; border-color: var(--overlay-2);}}
         footer {{visibility: hidden;}}
 
+        /* ===== New: status bar (top strip) ===== */
+        .status-bar {{
+            display: flex; align-items: center; justify-content: space-between;
+            gap: var(--space-3); flex-wrap: wrap;
+            background: var(--status-bar-bg);
+            border: 1px solid var(--status-bar-border);
+            border-radius: 10px;
+            padding: var(--space-2) var(--space-3);
+            margin-bottom: var(--space-1);
+        }}
+        .status-bar-left {{
+            display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+        }}
+        .status-bar-right {{
+            display: flex; align-items: center; gap: var(--space-2);
+            color: var(--accent-purple); font-size: .82rem; font-weight: 500;
+        }}
+        .status-bar-name   {{display:flex;align-items:center;gap:4px;
+                             color: var(--text-primary); font-weight:600;
+                             font-size:.9rem;}}
+        .status-bar-meta   {{display:flex;align-items:center;gap:4px;
+                             color: var(--text-muted); font-size:.78rem;}}
+        .status-bar-muted  {{color: var(--text-faint); font-size:.82rem;}}
+
+        /* ===== New: status pills (used by status bar + context panel) ===== */
+        .status-pill {{
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 3px 10px; border-radius: 999px;
+            font-size: .74rem; font-weight: 600; letter-spacing: .02em;
+        }}
+        .status-pill.run    {{background: var(--pill-run-bg);    color: var(--pill-run-fg);}}
+        .status-pill.pause  {{background: var(--pill-pause-bg);  color: var(--pill-pause-fg);}}
+        .status-pill.done   {{background: var(--pill-done-bg);   color: var(--pill-done-fg);}}
+        .status-pill.idle   {{background: var(--pill-idle-bg);   color: var(--pill-idle-fg);}}
+        .status-pill.error  {{background: var(--pill-error-bg);  color: var(--pill-error-fg);}}
+
+        /* ===== New: workflow step indicator ===== */
+        .step-indicator {{
+            display: flex; align-items: center; gap: var(--space-2);
+            background: var(--bg-surface);
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            padding: var(--space-2) var(--space-3);
+            margin-bottom: var(--space-3);
+        }}
+        .step {{
+            display: flex; align-items: center; gap: 6px;
+            padding: 4px 8px; border-radius: 8px;
+            color: var(--step-pending); font-size: .82rem; font-weight: 500;
+        }}
+        .step.pending {{background: var(--step-pending-bg);}}
+        .step.active  {{
+            background: var(--step-active-bg); color: var(--step-active);
+            font-weight: 700; box-shadow: 0 0 0 1px var(--step-active) inset;
+        }}
+        .step.done    {{color: var(--step-done);}}
+        .step-badge   {{display: inline-flex;}}
+        .step.active .step-badge svg {{animation: stepPulse 1.6s ease-in-out infinite;}}
+        .connector {{
+            flex: 1; height: 2px; min-width: 14px;
+            background: var(--step-connector); border-radius: 2px;
+        }}
+        .connector.done {{background: var(--step-done);}}
+
+        @keyframes stepPulse {{
+            0%, 100% {{opacity: 1;}}
+            50%      {{opacity: .55;}}
+        }}
+
+        /* ===== New: panel headers (chat + context) ===== */
+        .panel-header {{
+            display: flex; align-items: center; justify-content: space-between;
+            gap: var(--space-2); margin-bottom: var(--space-2);
+        }}
+        .panel-title {{
+            display: flex; align-items: center; gap: 6px;
+            color: var(--text-primary); font-size: 1.05rem; font-weight: 600;
+        }}
+        .panel-count {{
+            background: var(--overlay-2); color: var(--text-muted);
+            border-radius: 999px; padding: 1px 9px;
+            font-size: .72rem; font-weight: 600;
+        }}
+        .panel-subheader {{margin-bottom: var(--space-2);}}
+        .active-agent-chip {{
+            display: inline-flex; align-items: center; gap: 4px;
+            background: var(--accent-indigo); color: var(--accent-purple);
+            padding: 2px 8px; border-radius: 6px; font-size: .74rem;
+        }}
+
+        /* ===== New: chat empty state + run bar ===== */
+        .chat-empty {{
+            text-align: center; padding: var(--space-5) var(--space-3);
+            color: var(--text-muted);
+        }}
+        .chat-empty-icon {{font-size: 1.8rem; margin-bottom: var(--space-2);}}
+        .chat-empty p    {{margin: 4px 0; font-size: .9rem;}}
+        .chat-empty-cta  {{font-size: .8rem; opacity: .8;}}
+
+        .run-bar-divider {{
+            height: 1px; background: var(--border-soft);
+            margin: var(--space-3) 0 var(--space-2);
+        }}
+        .run-bar-label {{
+            display: flex; align-items: center; gap: 6px;
+            color: var(--accent-purple); font-size: .72rem;
+            letter-spacing: .05em; text-transform: uppercase;
+            margin-bottom: var(--space-1);
+        }}
+
+        /* ===== New: agent card in sidebar ===== */
+        .agent-card-header {{
+            display: flex; align-items: center; gap: 8px;
+            color: var(--text-primary); font-weight: 600; font-size: .9rem;
+            margin: var(--space-2) 0 4px;
+        }}
+        .agent-card-dot {{
+            width: 10px; height: 10px; border-radius: 50%;
+            display: inline-block; box-shadow: 0 0 0 2px var(--bg-base);
+        }}
+
+        /* ===== New: API key status chip in sidebar ===== */
+        .key-ok   {{display:inline-flex;align-items:center;gap:3px;
+                    color: var(--status-success); font-size:.72rem;
+                    margin-top: -6px; margin-bottom: 6px;}}
+        .key-warn {{display:inline-flex;align-items:center;gap:3px;
+                    color: var(--status-warning); font-size:.72rem;
+                    margin-top: -6px; margin-bottom: 6px;}}
+
         @media (prefers-reduced-motion: reduce) {{
             .stButton > button, .stDownloadButton > button {{
                 transition: none !important; transform: none !important;
             }}
+            .step.active .step-badge svg {{animation: none !important;}}
         }}
         </style>
         """,
@@ -427,10 +654,10 @@ def render_app() -> None:
     st.markdown(
         f"""
         <div class="hero">
-          <span class="hero-icon">{icon('bot', 36)}</span>
+          <span class="hero-icon">{icon('bot', 28)}</span>
           <div>
-            <h1>{config.app_name} <span style="opacity:.5;font-size:1rem">v{config.version}</span></h1>
-            <p>Multi-AI orchestration platform — agents collaborate on a shared context</p>
+            <h1>{config.app_name} <span style="opacity:.5;font-size:.9rem">v{config.version}</span></h1>
+            <p>Multi-AI orchestration — agents collaborate on a shared context</p>
           </div>
         </div>
         """,
@@ -444,23 +671,18 @@ def render_app() -> None:
 
     render_config_panel(orchestrator, session_manager)
 
-    # Initial prompt
-    with st.expander("Initial Prompt", icon="💬", expanded=True):
-        st.text_area(
-            "Enter the initial prompt for the first agent",
-            value=st.session_state.get("initial_prompt", ""),
-            height=150,
-            key="initial_prompt",
-            placeholder="e.g. Discuss the future of AI collaboration, with one critic and one optimist.",
-        )
-
     # Resolve the active session. After a rerun, ``session_manager`` reloaded
     # from disk, so the session returned here is the persisted one.
     session = session_manager.get_active_session()
     if not session and st.session_state.get("current_session_id"):
         session = session_manager.get_session(st.session_state["current_session_id"])
 
-    render_control_buttons(orchestrator, session)
+    # --- Status bar (replaces the old center metrics column) ---------------
+    _render_status_bar(session, orchestrator)
+
+    # --- Workflow step indicator ------------------------------------------
+    current_step = compute_step(session, orchestrator)
+    render_step_indicator(current_step)
 
     # Surface background-loop errors without blocking the rest of the render.
     loop_error = _consume_loop_error(orchestrator)
@@ -469,16 +691,10 @@ def render_app() -> None:
 
     # Auto-refresh while a session is alive so the user sees live progress.
     if session and orchestrator.is_loop_alive():
-        st.markdown(
-            f"<div class='active-agent'>{icon('refresh', 14)} "
-            f"<b>Live:</b> {session.get_current_agent().name if session.get_current_agent() else '...'} "
-            f"is working — UI auto-refreshes every 2s.</div>",
-            unsafe_allow_html=True,
-        )
         _maybe_autorefresh(orchestrator)
 
-    # Three-column layout.
-    col_chat, col_center, col_context = st.columns([1, 1, 1], gap="medium")
+    # --- Main 2-column layout: chat (wide) + context (narrow) -------------
+    col_chat, col_context = st.columns([1.8, 1], gap="medium")
 
     with col_chat:
         if session:
@@ -489,24 +705,16 @@ def render_app() -> None:
         else:
             _render_empty_state()
 
-    with col_center:
-        if session:
-            _render_metrics(session)
-        else:
-            st.markdown(_empty_metrics_html(), unsafe_allow_html=True)
-
     with col_context:
         if session:
             render_context_panel(session, orchestrator)
         else:
             _render_empty_state()
 
+    # --- Run bar (prompt + controls + export) -----------------------------
+    _render_run_bar(orchestrator, session)
+
 
 def _empty_metrics_html() -> str:
-    return (
-        f"<div class='empty-state' style='padding:24px;'>"
-        f"<div class='empty-state-icon'>{icon('sliders', 28)}</div>"
-        f"<h3>Status panel</h3>"
-        f"<p>Session status will appear here once you create one.</p>"
-        f"</div>"
-    )
+    # Kept for backwards compatibility; the metrics column no longer exists.
+    return ""

@@ -55,6 +55,48 @@ TOKENS: dict[str, str] = {
     "--status-error":   "#ef4444",
     "--status-warning": "#f59e0b",
     "--status-system":  "#475569",
+    "--status-success": "#10b981",
+    "--status-info":    "#3b82f6",
+
+    # Status pills (backgrounds, mostly translucent so text-on-accent reads)
+    "--pill-idle-bg":   "#ffffff14",
+    "--pill-idle-fg":   "#94a3b8",
+    "--pill-run-bg":    "#10b98126",
+    "--pill-run-fg":    "#34d399",
+    "--pill-pause-bg":  "#f59e0b26",
+    "--pill-pause-fg":  "#fbbf24",
+    "--pill-done-bg":   "#3b82f626",
+    "--pill-done-fg":   "#60a5fa",
+    "--pill-error-bg":  "#ef444426",
+    "--pill-error-fg":  "#fca5a5",
+
+    # Workflow step indicator
+    "--step-pending":   "#475569",
+    "--step-pending-bg":"#ffffff0a",
+    "--step-active":    "#a78bfa",
+    "--step-active-bg": "#a78bfa26",
+    "--step-done":      "#10b981",
+    "--step-done-bg":   "#10b98126",
+    "--step-connector": "#334155",
+
+    # Status bar (top-of-app strip)
+    "--status-bar-bg":   "#1a2332",
+    "--status-bar-border":"#334155",
+
+    # Run bar (bottom-of-app strip)
+    "--run-bar-bg":      "#16203299",
+    "--run-bar-border":  "#334155",
+
+    # Agent card in sidebar
+    "--agent-card-bg":   "#0f172a",
+
+    # Spacing scale (consistent rhythm). Use these instead of magic px.
+    "--space-1": "4px",
+    "--space-2": "8px",
+    "--space-3": "12px",
+    "--space-4": "16px",
+    "--space-5": "24px",
+    "--space-6": "32px",
 }
 
 
