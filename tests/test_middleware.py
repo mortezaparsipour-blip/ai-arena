@@ -58,10 +58,17 @@ def test_executor():
 
     # Use as_posix() to avoid backslash JSON escaping issues on Windows
     resp1 = "Some text before\n```tool_call\n{\"tool\": \"read_file\", \"arguments\": {\"path\": \"" + p.as_posix() + "\"}}\n```"
-    processed, had_tool = executor.process_response(resp1)
+    processed, had_tool, last_result = executor.process_response(resp1)
     assert had_tool
-    assert processed == ""
-    print(f"Processed response: had_tool={had_tool}, silent={processed == ''}")
+    # On success the executor now returns the success envelope (with the
+    # tool output) plus the underlying ToolResult — never an empty string.
+    # Returning "" used to silently swallow the result and break the
+    # orchestrator's main loop; see the 2026-07-19 debug report.
+    assert processed != ""
+    assert last_result is not None
+    assert last_result.success
+    assert "hello world" in processed
+    print(f"Processed response: had_tool={had_tool}, envelope_len={len(processed)}")
 
     p.unlink()
     print("Executor tests passed")
@@ -72,9 +79,11 @@ def test_retry_on_failure():
     executor = ToolExecutor(registry=reg, max_retries=2, session_id="test2")
 
     resp = "```tool_call\n{\"tool\": \"read_file\", \"arguments\": {\"path\": \"C:/nonexistent/file.md\"}}\n```"
-    processed, had_tool = executor.process_response(resp)
+    processed, had_tool, last_result = executor.process_response(resp)
     assert had_tool
     assert processed != ""  # Should return error envelope
+    assert last_result is not None
+    assert not last_result.success
     assert "error" in processed.lower() or "failed" in processed.lower()
     print(f"Retry test: error envelope returned correctly")
 

@@ -50,6 +50,13 @@ class SessionManager:
         """Load every ``session_*.json`` file under ``storage_dir`` into memory.
 
         The most recently updated session becomes the active one.
+
+        Any session that was left in ``is_running=True`` or ``is_paused=True``
+        by a crashed / killed previous process is reset to ``False`` for
+        both flags and re-persisted. Without this, the Streamlit UI would
+        show a stale green "Running" pill for a session whose background
+        thread is long dead, and clicking Start would silently spin up a
+        second orchestrator on top of the same persisted state.
         """
         latest_id: str | None = None
         latest_updated: datetime | None = None
@@ -68,6 +75,23 @@ class SessionManager:
             if latest_updated is None or session.updated_at > latest_updated:
                 latest_updated = session.updated_at
                 latest_id = session.id
+
+        # After loading, any session whose background thread is no longer
+        # alive (because we just started) must be marked idle. We do this
+        # once, after every load, so it works for both the most recent
+        # session and older ones that may still be on disk.
+        for session in self._sessions.values():
+            if session.is_running or session.is_paused:
+                session.is_running = False
+                session.is_paused = False
+                session.updated_at = datetime.now()
+                # Best-effort persist; if it fails, the in-memory state is
+                # still correct and the next regular save will catch up.
+                try:
+                    self._save_session(session)
+                except OSError:
+                    pass
+
         if latest_id is not None:
             self._active_session_id = latest_id
 

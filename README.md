@@ -55,7 +55,7 @@ streamlit run run.py
 2. The devcontainer will automatically:
    - Build a Python 3.11 environment
    - Install all dependencies from `requirements.txt`
-   - Start the Streamlit app on port 8501
+   - Start the Streamlit app on port 8085
 3. Click "Open in Browser" when the port forwards.
 
 ## Editable Install (Development)

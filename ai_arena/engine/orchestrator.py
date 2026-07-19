@@ -384,16 +384,59 @@ class Orchestrator:
                 return current_response
 
             # Process the tool call
-            processed_response, had_tool = executor.process_response(current_response)
+            processed_response, had_tool, last_result = executor.process_response(current_response)
 
             if not had_tool:
                 return current_response
 
-            if processed_response == "":
-                # Tool call succeeded silently — continue to next agent
-                return current_response
+            # --- Case 1: tool call SUCCEEDED ---------------------------------
+            # The executor returned the success envelope (and the underlying
+            # ``ToolResult``). Record the envelope as a system message so the
+            # UI and ``session.messages`` both see what the tool returned,
+            # then re-call the same agent with the envelope so it can produce
+            # a natural-language response that references the tool output.
+            #
+            # Without this, the orchestrator would previously just hand the
+            # raw tool-call JSON to the next agent and the loop would spin
+            # on ``read_file`` forever.
+            if last_result is not None and last_result.success:
+                success_envelope = processed_response
 
-            # Tool call failed — inject error envelope and retry with same agent
+                tool_result_msg = Message(
+                    agent_id=agent.id,
+                    agent_name=agent.name,
+                    content=success_envelope,
+                    round_number=session.current_round,
+                    is_system=True,
+                    had_tool_call=True,
+                )
+                session.messages.append(tool_result_msg)
+                self.session_manager._save_session(session)
+
+                try:
+                    self.rate_limiter.wait()
+                    current_response = self._call_provider(
+                        agent, session, tool_result_envelope=success_envelope
+                    )
+                except ProviderError as exc:
+                    error_msg = Message(
+                        agent_id=agent.id,
+                        agent_name=agent.name,
+                        content=f"[ERROR] Post-tool provider call failed: {exc}",
+                        round_number=session.current_round,
+                        is_system=True,
+                    )
+                    session.messages.append(error_msg)
+                    self.session_manager._save_session(session)
+                    return error_msg.content
+
+                # Loop again: the agent may issue another tool call, or it
+                # may have produced natural language; the next iteration
+                # will route both correctly.
+                continue
+
+            # --- Case 2: tool call FAILED -----------------------------------
+            # Inject the error envelope and retry with the same agent.
             error_envelope = processed_response
 
             # Record the tool failure in conversation

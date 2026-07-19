@@ -165,26 +165,34 @@ class ToolExecutor:
         self.max_retries = max_retries
         self.audit_logger = AuditLogger(session_id)
 
-    def process_response(self, response_text: str) -> tuple[str, bool]:
+    def process_response(
+        self, response_text: str
+    ) -> tuple[str, bool, ToolResult | None]:
         """Process an AI response for tool calls.
 
         Args:
             response_text: Raw response text from the AI.
 
         Returns:
-            Tuple of (processed_response_text, had_tool_call).
-            - If no tool call: returns original text, False
-            - If tool call succeeds silently: returns "", True
-            - If tool call fails after retries: returns error envelope, True
+            Tuple of (processed_response_text, had_tool_call, last_result).
+            - If no tool call: returns (original_text, False, None)
+            - If tool call succeeds: returns (success_envelope, True, result)
+            - If tool call fails after retries: returns (error_envelope, True, result)
+
+            The envelope is the *envelope string* the orchestrator should
+            either surface to the user (on failure → retry path) or feed back
+            to the agent as a user message (on success → re-prompt path).
+            Returning the ``ToolResult`` lets the orchestrator branch on
+            ``result.success`` without re-parsing the envelope.
         """
         try:
             tool_call = parse_tool_call(response_text)
         except ToolCallParseError as exc:
             self.audit_logger.log_error("parse_error", {"error": str(exc), "response_preview": response_text[:200]})
-            return response_text, False
+            return response_text, False, None
 
         if tool_call is None:
-            return response_text, False
+            return response_text, False, None
 
         self.audit_logger.log_tool_call(tool_call, attempt=1)
 
@@ -193,7 +201,7 @@ class ToolExecutor:
 
         if result.success:
             self.audit_logger.log_tool_result(tool_call, result, attempt=1)
-            return "", True
+            return build_tool_result_envelope(result), True, result
         else:
             error_envelope = build_tool_error_envelope(
                 tool_call, result.error, attempt=self.max_retries, max_attempts=self.max_retries
@@ -202,7 +210,7 @@ class ToolExecutor:
                 "tool": tool_call.tool_name,
                 "error": result.error,
             })
-            return error_envelope, True
+            return error_envelope, True, result
 
     def _execute_with_retry(self, tool_call: ToolCall) -> ToolResult:
         """Execute a tool call with retry logic.

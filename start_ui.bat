@@ -16,6 +16,6 @@ echo [OK] Virtual environment activated.
 echo [INFO] Starting AI Arena...
 echo.
 
-streamlit run run.py
+streamlit run run.py --server.port 8085
 
 pause

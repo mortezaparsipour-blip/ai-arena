@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+graphify-out/
 
 # Secrets / environment
 .env
@@ -61,6 +62,7 @@ htmlcov/
 
 # Runtime data (created by the orchestrator, not source)
 contexts/
+shared_context.txt
 
 # Generated docs - not tracked in git
 QUICKSTART.md

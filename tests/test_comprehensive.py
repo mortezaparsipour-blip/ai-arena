@@ -121,7 +121,7 @@ def test_retry_logic():
 
     # Test with nonexistent file - should fail after retries
     resp = "```tool_call\n{\"tool\": \"read_file\", \"arguments\": {\"path\": \"C:/nonexistent/file.md\"}}\n```"
-    processed, had_tool = executor.process_response(resp)
+    processed, had_tool, _last_result = executor.process_response(resp)
     assert had_tool
     assert processed != ""  # Error envelope returned
     assert "failed" in processed.lower() or "error" in processed.lower()

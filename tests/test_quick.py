@@ -14,7 +14,7 @@ print("test_retry_logic start")
 from ai_arena.engine.tool_executor import ToolExecutor
 executor = ToolExecutor(registry=reg, max_retries=2, session_id="retry_test")
 resp = "```tool_call\n{\"tool\": \"read_file\", \"arguments\": {\"path\": \"C:/nonexistent/file.md\"}}\n```"
-processed, had_tool = executor.process_response(resp)
+processed, had_tool, _last_result = executor.process_response(resp)
 assert had_tool
 assert processed != ""
 print("test_retry_logic passed")

@@ -9,6 +9,29 @@ from typing import Any
 from .base import BaseTool, ToolError, ToolResult
 
 
+# Project root, computed once. Used as the resolution root for any
+# *relative* path an agent hands to a file tool. Without this, ``read_file
+# shared_context.txt`` only works when the process's CWD happens to be the
+# project root — under Streamlit that was the actual root cause of the
+# initial ``No such file or directory`` errors and the subsequent silent
+# retry storm.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _resolve_path(raw_path: str) -> Path:
+    """Resolve ``raw_path`` against the project root when it is relative.
+
+    Absolute paths are returned unchanged. This makes the file tools
+    CWD-independent — a relative agent path like ``shared_context.txt``
+    always lands at ``<project_root>/shared_context.txt`` no matter where
+    the Streamlit / pytest / CLI process was launched from.
+    """
+    p = Path(raw_path)
+    if p.is_absolute():
+        return p
+    return _PROJECT_ROOT / p
+
+
 class ReadFileTool(BaseTool):
     """Read the contents of a file."""
 
@@ -28,7 +51,7 @@ class ReadFileTool(BaseTool):
     def execute(self, **kwargs: Any) -> ToolResult:
         path = kwargs.get("path", "")
         try:
-            content = Path(path).read_text(encoding="utf-8")
+            content = _resolve_path(path).read_text(encoding="utf-8")
             return ToolResult(success=True, output=content)
         except Exception as exc:
             return ToolResult(success=False, output="", error=f"Failed to read file: {exc}")
@@ -58,7 +81,9 @@ class WriteFileTool(BaseTool):
         path = kwargs.get("path", "")
         content = kwargs.get("content", "")
         try:
-            Path(path).write_text(content, encoding="utf-8")
+            resolved = _resolve_path(path)
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_text(content, encoding="utf-8")
             return ToolResult(success=True, output=f"Successfully wrote {len(content)} characters to {path}")
         except Exception as exc:
             return ToolResult(success=False, output="", error=f"Failed to write file: {exc}")
@@ -88,7 +113,7 @@ class AppendFileTool(BaseTool):
         path = kwargs.get("path", "")
         content = kwargs.get("content", "")
         try:
-            p = Path(path)
+            p = _resolve_path(path)
             p.parent.mkdir(parents=True, exist_ok=True)
             with p.open("a", encoding="utf-8") as f:
                 f.write(content)
@@ -126,7 +151,7 @@ class PatchFileTool(BaseTool):
         old_text = kwargs.get("old_text", "")
         new_text = kwargs.get("new_text", "")
         try:
-            p = Path(path)
+            p = _resolve_path(path)
             if not p.exists():
                 return ToolResult(success=False, output="", error=f"File not found: {path}")
             content = p.read_text(encoding="utf-8")
@@ -164,7 +189,7 @@ class SummarizeContextTool(BaseTool):
         path = kwargs.get("path", "")
         max_length = kwargs.get("max_length", 500)
         try:
-            content = Path(path).read_text(encoding="utf-8")
+            content = _resolve_path(path).read_text(encoding="utf-8")
             lines = content.strip().splitlines()
             summary_parts = []
             total = 0

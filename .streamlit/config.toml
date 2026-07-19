@@ -13,6 +13,6 @@ toolbarMode = "minimal"
 level = "info"
 
 [server]
-port = 8501
+port = 8085
 headless = true
 runOnSave = true
