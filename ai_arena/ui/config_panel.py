@@ -200,9 +200,14 @@ def render_config_panel(
                     key=f"agent_api_key_{i}",
                     help=f"Falls back to {provider_name.upper()}_API_KEY from .env if empty.",
                 )
+                # The text_input may be empty even when .env has a key (user
+                # cleared it, or session_state was seeded with ""). Resolve
+                # the effective key here so the Agent always gets a usable
+                # value and the status badge matches what we actually call.
+                effective_api_key = api_key.strip() or config.get_api_key(provider_name)
                 # Inline micro-feedback on the key status.
                 st.markdown(
-                    _api_key_status(provider_name, api_key),
+                    _api_key_status(provider_name, effective_api_key),
                     unsafe_allow_html=True,
                 )
                 max_tokens = st.number_input(
@@ -256,7 +261,7 @@ def render_config_panel(
                 system_prompt=system_prompt,
                 provider=provider_name,
                 model=model,
-                api_key=api_key,
+                api_key=effective_api_key,
                 max_tokens=int(max_tokens),
                 color=colors[i % len(colors)],
             ))
