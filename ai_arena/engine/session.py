@@ -117,6 +117,7 @@ class SessionManager:
                 is_paused=bool(data.get("is_paused", False)),
                 is_dry_run=bool(data.get("is_dry_run", False)),
                 tool_max_retries=int(data.get("tool_max_retries", 3)),
+                initial_prompt=data.get("initial_prompt", ""),
                 created_at=self._parse_dt(data.get("created_at")),
                 updated_at=self._parse_dt(data.get("updated_at")),
             )
@@ -284,23 +285,15 @@ class SessionManager:
             "is_paused": session.is_paused,
             "is_dry_run": session.is_dry_run,
             "tool_max_retries": session.tool_max_retries,
+            "initial_prompt": session.initial_prompt,
             "created_at": session.created_at.isoformat(),
             "updated_at": session.updated_at.isoformat(),
         }
         storage_file = self.storage_dir / f"session_{session.id}.json"
-        tmp_file = storage_file.with_suffix(".json.tmp")
         lock = self._save_lock(session.id)
         payload = json.dumps(data, indent=2)
         with lock:
-            try:
-                with tmp_file.open("w", encoding="utf-8") as f:
-                    f.write(payload)
-                os.replace(tmp_file, storage_file)
-            except OSError:
-                # Best-effort cleanup; raise so the caller can decide.
-                try:
-                    if tmp_file.exists():
-                        tmp_file.unlink()
-                except OSError:
-                    pass
-                raise
+            # Write directly to the target to avoid Windows
+            # PermissionError with atomic os.replace(tmp → real).
+            with storage_file.open("w", encoding="utf-8") as f:
+                f.write(payload)

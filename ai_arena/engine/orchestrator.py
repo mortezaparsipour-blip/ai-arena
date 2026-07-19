@@ -22,6 +22,7 @@ from ..models.agent import Agent
 from ..models.message import Message
 from ..models.session_state import SessionState
 from ..providers.base import BaseProvider, ProviderError
+from ..tools.base import ToolResult
 from ..tools.file_tools import compute_diff
 from .session import SessionManager
 
@@ -113,17 +114,34 @@ class Orchestrator:
         """
         return self.tool_registry.get_manual()
 
-    def _build_system_prompt(self, agent: Agent, inject_tools: bool = True) -> str:
+    def _build_system_prompt(
+        self,
+        agent: Agent,
+        session: SessionState | None = None,
+        inject_tools: bool = True,
+    ) -> str:
         """Build the system prompt for an agent.
 
         Args:
             agent: The agent to build the prompt for.
+            session: Current session. When provided, ``{ctx_path}`` in
+                the agent's prompt is substituted with the session's
+                context file path. Without this, agents routinely
+                hallucinate file paths like ``/shared/context.txt`` and
+                the entire loop dies before any useful output is
+                produced. The old ``{round}`` placeholder is gone —
+                the file is the state, round numbers are not surfaced
+                to the model anymore.
             inject_tools: Whether to inject the tool manual.
 
         Returns:
             Complete system prompt string.
         """
         prompt = agent.system_prompt
+        if session is not None:
+            prompt = prompt.replace(
+                "{ctx_path}", session.context_file_path
+            )
         if inject_tools:
             prompt = prompt + "\n\n" + self._get_tool_manual()
         return prompt
@@ -136,30 +154,59 @@ class Orchestrator:
     ) -> list[dict[str, str]]:
         """Build the message list for a provider API call.
 
+        The model sees ONLY the system prompt and a single user message.
+        The user message includes the current state of the context file
+        inlined as a fenced code block — this is how the orchestrator
+        injects the file content into the model. The model does NOT need
+        to call ``read_file`` to see the file; the orchestrator handles
+        that. The model only calls ``write_file`` with its improved
+        version.
+
+        Why inject instead of asking the model to read_file:
+        - One shot per turn. The model can't get into a read loop because
+          we never re-send a tool envelope back to the same agent.
+        - File content is guaranteed to be in the model's context every
+          turn, not gated on the model deciding to call read_file.
+        - Smaller surface area for the model to misbehave on.
+
         Args:
             agent: The agent whose turn it is.
             session: Current session state.
-            tool_result_envelope: Optional tool result to inject as user message.
+            tool_result_envelope: Optional tool result to inject as the
+                user message when retrying after a tool call. With the
+                new one-shot flow this is rarely set.
 
         Returns:
             List of message dicts for the provider.
         """
         messages: list[dict[str, str]] = []
 
-        # System message with agent instructions and available tools
+        # System message with agent instructions and tool manual.
         inject_tools = session.current_round == 0 and not tool_result_envelope
-        system_content = self._build_system_prompt(agent, inject_tools=inject_tools)
+        system_content = self._build_system_prompt(
+            agent, session=session, inject_tools=inject_tools
+        )
         messages.append({"role": "system", "content": system_content})
 
-        # If we're retrying after a tool failure, inject the error envelope
+        # Single user message drives this turn.
+        # - Tool retry path: hand the tool result envelope back.
+        # - Otherwise: inline the current file state so the model can
+        #   produce a write_file call without needing read_file.
         if tool_result_envelope:
             messages.append({"role": "user", "content": tool_result_envelope})
-
-        # Recent conversation history (last 10 messages to avoid token bloat)
-        recent = session.messages[-10:] if len(session.messages) > 10 else session.messages
-        for msg in recent:
-            role = "user" if msg.agent_id != agent.id else "assistant"
-            messages.append({"role": role, "content": msg.content})
+        else:
+            current = self._read_context(session) or "(empty file)"
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"Current state of the context file "
+                    f"({session.context_file_path}):\n\n"
+                    f"```\n{current}\n```\n\n"
+                    "Produce your improved version. Call write_file with "
+                    "the COMPLETE new content of the file. "
+                    "Do not call read_file — the current state is above."
+                ),
+            })
 
         return messages
 
@@ -320,8 +367,10 @@ class Orchestrator:
             self.session_manager._save_session(session)
             return error_msg
 
-        # Process tool calls in the response (retry loop)
-        final_response = self._process_tool_calls(
+        # Process tool calls in the response (one shot per turn).
+        # The orchestrator does NOT re-call the agent with the tool
+        # envelope — that's how the read loop happened.
+        final_response, last_result = self._process_tool_calls(
             agent=agent,
             session=session,
             executor=executor,
@@ -331,15 +380,23 @@ class Orchestrator:
         if final_response is None:
             return None
 
-        # Update context with the final response
-        current_context = self._read_context(session)
-        new_context = self._append_agent_turn_to_context(
-            current_context, agent, final_response, round_number=session.current_round + 1
-        )
-        _, diff = self._update_context(session, new_context)
+        # File state is the source of truth. The agent updated the file
+        # via write_file (or made no change if it didn't call a tool).
+        # We do NOT call _append_agent_turn_to_context here — that was
+        # the old "append each turn's section" pattern which fights with
+        # the write_file-replace model and produced the "duplicated
+        # Critic/Optimist sections" bug.
+        #
+        # Compute a diff only for the UI; the file itself is already
+        # in its post-tool state.
+        had_tool = last_result is not None
+        diff: str | None = None
+        if had_tool and last_result is not None and last_result.success:
+            # Show the user what changed via a small diff string built
+            # from the tool envelope (it's the most useful summary).
+            diff = (last_result.output or "")[:200]
 
         # Record message
-        had_tool = has_tool_call(final_response)
         message = Message(
             agent_id=agent.id,
             agent_name=agent.name,
@@ -360,8 +417,20 @@ class Orchestrator:
         session: SessionState,
         executor: ToolExecutor,
         response: str,
-    ) -> str | None:
-        """Process tool calls in an agent response with retry logic.
+    ) -> tuple[str | None, ToolResult | None]:
+        """Process AT MOST ONE tool call in an agent's response, then
+        return. The orchestrator does NOT re-call the same agent with the
+        tool envelope — that's how the read loop happened.
+
+        One shot per turn:
+        1. If the response has no tool call → return (response, None).
+        2. If the response has a tool call → execute it (write_file
+           updates the context file, read_file is now a no-op since the
+           orchestrator already injects the file content in the user
+           message), record the envelope in session.messages, and
+           return (envelope, last_result).
+        3. The next agent then gets a fresh user message with the
+           (possibly updated) file content.
 
         Args:
             agent: The agent whose turn it is.
@@ -370,120 +439,35 @@ class Orchestrator:
             response: Initial response from the agent.
 
         Returns:
-            Final response text after all tool calls are resolved, or None if stopped.
+            Tuple of (final_response, last_result). last_result is None
+            when no tool call was processed. final_response is None if
+            the session was stopped.
         """
-        current_response = response
-        max_inner_loops = 5  # Prevent infinite tool call loops
+        if self._stop_event:
+            return None, None
 
-        for _ in range(max_inner_loops):
-            if self._stop_event:
-                return None
+        if not has_tool_call(response):
+            return response, None
 
-            # Check if the response contains a tool call
-            if not has_tool_call(current_response):
-                return current_response
+        processed_response, had_tool, last_result = executor.process_response(response)
 
-            # Process the tool call
-            processed_response, had_tool, last_result = executor.process_response(current_response)
+        if not had_tool or last_result is None:
+            return response, None
 
-            if not had_tool:
-                return current_response
-
-            # --- Case 1: tool call SUCCEEDED ---------------------------------
-            # The executor returned the success envelope (and the underlying
-            # ``ToolResult``). Record the envelope as a system message so the
-            # UI and ``session.messages`` both see what the tool returned,
-            # then re-call the same agent with the envelope so it can produce
-            # a natural-language response that references the tool output.
-            #
-            # Without this, the orchestrator would previously just hand the
-            # raw tool-call JSON to the next agent and the loop would spin
-            # on ``read_file`` forever.
-            if last_result is not None and last_result.success:
-                success_envelope = processed_response
-
-                tool_result_msg = Message(
-                    agent_id=agent.id,
-                    agent_name=agent.name,
-                    content=success_envelope,
-                    round_number=session.current_round,
-                    is_system=True,
-                    had_tool_call=True,
-                )
-                session.messages.append(tool_result_msg)
-                self.session_manager._save_session(session)
-
-                try:
-                    self.rate_limiter.wait()
-                    current_response = self._call_provider(
-                        agent, session, tool_result_envelope=success_envelope
-                    )
-                except ProviderError as exc:
-                    error_msg = Message(
-                        agent_id=agent.id,
-                        agent_name=agent.name,
-                        content=f"[ERROR] Post-tool provider call failed: {exc}",
-                        round_number=session.current_round,
-                        is_system=True,
-                    )
-                    session.messages.append(error_msg)
-                    self.session_manager._save_session(session)
-                    return error_msg.content
-
-                # Loop again: the agent may issue another tool call, or it
-                # may have produced natural language; the next iteration
-                # will route both correctly.
-                continue
-
-            # --- Case 2: tool call FAILED -----------------------------------
-            # Inject the error envelope and retry with the same agent.
-            error_envelope = processed_response
-
-            # Record the tool failure in conversation
-            tool_failure_msg = Message(
-                agent_id=agent.id,
-                agent_name=agent.name,
-                content=error_envelope,
-                round_number=session.current_round,
-                is_system=True,
-                had_tool_call=True,
-            )
-            session.messages.append(tool_failure_msg)
-            self.session_manager._save_session(session)
-
-            # Retry: call the same agent with the error envelope
-            try:
-                self.rate_limiter.wait()
-                current_response = self._call_provider(
-                    agent, session, tool_result_envelope=error_envelope
-                )
-            except ProviderError as exc:
-                error_msg = Message(
-                    agent_id=agent.id,
-                    agent_name=agent.name,
-                    content=f"[ERROR] Retry provider call failed: {exc}",
-                    round_number=session.current_round,
-                    is_system=True,
-                )
-                session.messages.append(error_msg)
-                self.session_manager._save_session(session)
-                return error_msg.content
-
-        # Max inner loops exceeded — graceful degradation
-        warning_msg = (
-            f"[WARNING] Agent {agent.name} exceeded maximum tool call iterations. "
-            f"Skipping tool step and continuing with current response."
-        )
-        degradation_msg = Message(
+        # Record the tool result envelope in the message log. We mark
+        # it as a system message so the UI shows it under the SYS badge.
+        envelope_msg = Message(
             agent_id=agent.id,
             agent_name=agent.name,
-            content=warning_msg,
+            content=processed_response,
             round_number=session.current_round,
             is_system=True,
+            had_tool_call=True,
         )
-        session.messages.append(degradation_msg)
+        session.messages.append(envelope_msg)
         self.session_manager._save_session(session)
-        return current_response
+
+        return processed_response, last_result
 
     def start_session(
         self,
@@ -502,15 +486,36 @@ class Orchestrator:
         session.current_round = 0
         session.current_agent_index = 0
         session.messages = []
+        # Stash the task brief on the session so it can be sent to the
+        # model as the first user message on round 0. The context file
+        # itself stays as a clean skeleton — agents never see the
+        # initial prompt again unless they re-read the file.
+        session.initial_prompt = initial_prompt
 
         # Update the existing rate limiter's delay without rebuilding it,
         # so the previous ``_last_call`` timestamp is preserved and burst
         # protection still applies to the first call after a resume.
         self.rate_limiter.delay_seconds = float(session.rate_limit_seconds)
 
-        if initial_prompt:
-            ctx_path = Path(session.context_file_path)
-            ctx_path.write_text(f"# Initial Prompt\n\n{initial_prompt}\n", encoding="utf-8")
+        # Seed the context file with the initial task. The file is the
+        # single source of truth: every subsequent agent reads the file
+        # and rewrites it in full. The "## Initial Task" section must
+        # be preserved verbatim by every rewrite so the task brief
+        # never gets lost, and the "## Working Draft" section is the
+        # area agents replace wholesale (write_file, not append_file).
+        ctx_path = Path(session.context_file_path)
+        ctx_path.parent.mkdir(parents=True, exist_ok=True)
+        seed = (
+            "# Shared Context\n\n"
+            "## Initial Task\n"
+            f"{initial_prompt or '(no initial prompt provided)'}\n\n"
+            "---\n\n"
+            "## Working Draft\n"
+            "<!-- Agents rewrite everything below this line. "
+            "Keep the # Shared Context header and the ## Initial Task "
+            "section above intact; replace the rest in full. -->\n"
+        )
+        ctx_path.write_text(seed, encoding="utf-8")
 
         self.session_manager._save_session(session)
 

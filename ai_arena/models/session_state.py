@@ -37,10 +37,14 @@ class SessionState:
     agents: list[Agent] = field(default_factory=list)
     messages: list[Message] = field(default_factory=list)
     context_file_path: str = "shared_context.md"
+    # The user-provided task brief. Stored on the session (not in the
+    # context file) so it can be sent to the model as the first user
+    # message on round 0 without polluting the agents' shared scratchpad.
+    initial_prompt: str = ""
     current_round: int = 0
     current_agent_index: int = 0
     max_rounds: int = 10
-    rate_limit_seconds: int = 60
+    rate_limit_seconds: int = 5
     is_running: bool = False
     is_paused: bool = False
     is_dry_run: bool = False

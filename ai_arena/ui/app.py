@@ -12,6 +12,7 @@ Layout (responsive, collapses gracefully on mobile):
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -348,11 +349,9 @@ def _maybe_autorefresh(orchestrator: Orchestrator) -> None:
 
             st_autorefresh(interval=2000, key="arena_autorefresh")
         except ImportError:
-            # Fallback: ask JS to reload. Less reliable but no dependency.
-            st.markdown(
-                "<script>setTimeout(()=>window.location.reload(),2000)</script>",
-                unsafe_allow_html=True,
-            )
+            # Fallback: block briefly then native rerun (preserves session_state).
+            time.sleep(2)
+            st.rerun()
 
 
 def render_app() -> None:

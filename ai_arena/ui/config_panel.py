@@ -79,6 +79,56 @@ def _api_key_status(provider_name: str, value: str) -> str:
     return f"<span class='key-warn'>{icon('alert', 12)} enter key</span>"
 
 
+# Heuristic prefix → provider mapping. Used to flag obvious key/provider
+# mismatches (e.g. ``csk-...`` pasted into the OpenRouter field, or an
+# ``sk-or-v1-...`` key sent to Cerebras). Keys that don't match any known
+# prefix are left alone — custom proxies and self-hosted gateways often
+# use non-standard formats.
+_KEY_PREFIX_HINTS: dict[str, tuple[str, ...]] = {
+    "openai": ("sk-",),
+    "anthropic": ("sk-ant-",),
+    "openrouter": ("sk-or-v1-",),
+    "cerebras": ("csk-",),
+}
+
+
+def _provider_key_prefix_warning(provider_name: str, value: str) -> str:
+    """Return a small warning chip if the API key prefix doesn't match the
+    selected provider. Returns an empty string when no obvious mismatch.
+
+    Match is done against the LONGEST known prefix so a generic ``sk-``
+    (OpenAI) doesn't shadow a more specific ``sk-or-v1-`` (OpenRouter).
+    """
+    selected = provider_name.lower()
+    # Step 1: does the value match ANY prefix of the SELECTED provider?
+    # If yes, no warning — the key is plausibly for this provider.
+    selected_prefixes = sorted(
+        _KEY_PREFIX_HINTS.get(selected, ()), key=len, reverse=True
+    )
+    if any(value.startswith(p) for p in selected_prefixes):
+        return ""
+    # Step 2: if it doesn't match the selected provider, does it look
+    # like a known OTHER provider's key? Longest match wins.
+    other_prefixes = sorted(
+        (
+            (prefix, prov)
+            for prov, prefixes in _KEY_PREFIX_HINTS.items()
+            for prefix in prefixes
+            if prov != selected
+        ),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+    for prefix, prov in other_prefixes:
+        if value.startswith(prefix):
+            return (
+                f"<span class='key-warn'>{icon('alert', 12)} "
+                f"key looks like a <b>{prov}</b> key, not "
+                f"<b>{provider_name}</b></span>"
+            )
+    return ""
+
+
 def render_config_panel(
     orchestrator: Any,
     session_manager: Any,
@@ -111,7 +161,7 @@ def render_config_panel(
                 "Rate limit (sec)",
                 min_value=0,
                 max_value=300,
-                value=st.session_state.get("rate_limit", 60),
+                value=st.session_state.get("rate_limit", 5),
                 key="rate_limit",
                 help="Minimum seconds between API calls.",
             )
@@ -180,7 +230,20 @@ def render_config_panel(
                     )
                     provider = providers.get(provider_name, OpenAIProvider())
 
-                current_model = st.session_state.get(f"agent_model_{i}", provider.default_model)
+                # Provider-aware state keys: including the provider name in
+                # the key forces a fresh widget when the user switches
+                # providers, so the API-key field and Model dropdown are
+                # re-initialized against the new provider instead of showing
+                # the previous provider's value (which is what produced
+                # 401s when a Cerebras key was sent to OpenRouter or vice
+                # versa).
+                model_state_key = f"agent_model_{i}_{provider_name}"
+                api_key_state_key = f"agent_api_key_{i}_{provider_name}"
+
+                default_model = provider.default_model
+                if model_state_key not in st.session_state:
+                    st.session_state[model_state_key] = default_model
+                current_model = st.session_state[model_state_key]
                 model_index = (
                     provider.available_models.index(current_model)
                     if current_model in provider.available_models
@@ -190,26 +253,40 @@ def render_config_panel(
                     "Model",
                     options=provider.available_models,
                     index=model_index,
-                    key=f"agent_model_{i}",
+                    key=model_state_key,
                 )
+
+                # Pre-fill the API key field with the .env value for THIS
+                # provider. Because the key now contains ``provider_name``,
+                # a provider change yields a brand-new widget and a fresh
+                # auto-fill from the matching env var.
+                env_key = config.get_api_key(provider_name)
+                if api_key_state_key not in st.session_state:
+                    st.session_state[api_key_state_key] = env_key
                 api_key = st.text_input(
                     "API Key",
-                    value=st.session_state.get(f"agent_api_key_{i}", "")
-                    or config.get_api_key(provider_name),
                     type="password",
-                    key=f"agent_api_key_{i}",
+                    key=api_key_state_key,
                     help=f"Falls back to {provider_name.upper()}_API_KEY from .env if empty.",
                 )
-                # The text_input may be empty even when .env has a key (user
-                # cleared it, or session_state was seeded with ""). Resolve
-                # the effective key here so the Agent always gets a usable
-                # value and the status badge matches what we actually call.
-                effective_api_key = api_key.strip() or config.get_api_key(provider_name)
+                # Resolve the effective key: user input wins, otherwise .env.
+                # This is what gets passed to the Agent and shown in the badge,
+                # so the UI's claim and the actual API call always agree.
+                effective_api_key = api_key.strip() or env_key
                 # Inline micro-feedback on the key status.
                 st.markdown(
                     _api_key_status(provider_name, effective_api_key),
                     unsafe_allow_html=True,
                 )
+                # Provider-key prefix sanity check. Catches the classic
+                # "I selected OpenRouter in the dropdown but my .env Cerebras
+                # key got pasted here" mistake before it becomes a 401.
+                if effective_api_key:
+                    prefix_warning = _provider_key_prefix_warning(
+                        provider_name, effective_api_key
+                    )
+                    if prefix_warning:
+                        st.markdown(prefix_warning, unsafe_allow_html=True)
                 max_tokens = st.number_input(
                     "Max tokens",
                     min_value=64,
