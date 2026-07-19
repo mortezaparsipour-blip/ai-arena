@@ -63,6 +63,11 @@ htmlcov/
 # Runtime data (created by the orchestrator, not source)
 contexts/
 shared_context.txt
+shared_context.md
+poem.txt
+
+# IDE / tooling workspace (local only)
+.zcode/
 
 # Generated docs - not tracked in git
 QUICKSTART.md
