@@ -34,11 +34,16 @@ class RateLimiter:
             elapsed = now - self._last_call
             if elapsed < self.delay_seconds:
                 wait_time = self.delay_seconds - elapsed
-                time.sleep(wait_time)
-                self._last_call = time.time()
-                return wait_time
-            self._last_call = now
-            return 0.0
+            else:
+                self._last_call = now
+                return 0.0
+
+        # Sleep outside the lock so other callers aren't blocked.
+        time.sleep(wait_time)
+
+        with self._lock:
+            self._last_call = time.time()
+            return wait_time
 
     def reset(self) -> None:
         """Reset the rate limiter, allowing an immediate call."""

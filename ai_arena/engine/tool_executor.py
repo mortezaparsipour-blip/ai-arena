@@ -197,10 +197,10 @@ class ToolExecutor:
         self.audit_logger.log_tool_call(tool_call, attempt=1)
 
         # Execute with retries
-        result = self._execute_with_retry(tool_call)
+        result, success_attempt = self._execute_with_retry(tool_call)
 
         if result.success:
-            self.audit_logger.log_tool_result(tool_call, result, attempt=1)
+            self.audit_logger.log_tool_result(tool_call, result, attempt=success_attempt)
             return build_tool_result_envelope(result), True, result
         else:
             error_envelope = build_tool_error_envelope(
@@ -212,14 +212,16 @@ class ToolExecutor:
             })
             return error_envelope, True, result
 
-    def _execute_with_retry(self, tool_call: ToolCall) -> ToolResult:
+    def _execute_with_retry(self, tool_call: ToolCall) -> tuple[ToolResult, int]:
         """Execute a tool call with retry logic.
 
         Args:
             tool_call: Parsed tool call.
 
         Returns:
-            Final tool result (success or failure).
+            Tuple of (final_tool_result, attempt_on_success).
+            attempt_on_success is the attempt number on which the tool
+            succeeded, or max_retries if it never did.
         """
         last_error = ""
         for attempt in range(1, self.max_retries + 1):
@@ -229,12 +231,12 @@ class ToolExecutor:
                     success=False,
                     output="",
                     error=f"Unknown tool: {tool_call.tool_name}. Available tools: {', '.join(t.name for t in self.registry.list_tools())}",
-                )
+                ), attempt
 
             result = tool.execute(**tool_call.arguments)
 
             if result.success:
-                return result
+                return result, attempt
 
             last_error = result.error
             self.audit_logger.log_tool_result(tool_call, result, attempt=attempt)
@@ -243,7 +245,7 @@ class ToolExecutor:
             success=False,
             output="",
             error=f"Tool '{tool_call.tool_name}' failed after {self.max_retries} attempts. Last error: {last_error}",
-        )
+        ), self.max_retries
 
     def execute_tool(self, tool_name: str, **kwargs: Any) -> ToolResult:
         """Execute a tool directly by name.

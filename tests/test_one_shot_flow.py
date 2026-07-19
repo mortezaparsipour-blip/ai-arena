@@ -16,6 +16,7 @@ import sys
 import json
 import tempfile
 import pathlib
+import threading
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -35,7 +36,7 @@ class _NoToolRegistry:
 def _make_orch():
     orch = Orchestrator.__new__(Orchestrator)
     orch.tool_registry = _NoToolRegistry()
-    orch._stop_event = False
+    orch._stop_event = threading.Event()
     class _NoSave:
         def _save_session(self, s):
             pass
@@ -67,7 +68,8 @@ def test_1_start_session_seeds_file(tmp_path):
             pass
     orch.session_manager = FakeSM()
     orch.rate_limiter = type("L", (), {"delay_seconds": 0})()
-    orch._stop_event = True
+    orch._stop_event = threading.Event()
+    orch._stop_event.set()
     orch.start_session(session, initial_prompt="tell a short story")
 
     on_disk = (tmp_path / "ctx.md").read_text(encoding="utf-8")
@@ -151,7 +153,10 @@ def test_3_process_tool_calls_one_shot(tmp_path):
     assert fake_exec.process_response_calls == 1, (
         "executor must be called exactly once (no inner loop)"
     )
-    assert final is not None
+    assert final is None, (
+        "final must be None for tool-call turns — "
+        "the envelope is recorded inside _process_tool_calls"
+    )
     assert last_result is not None
     assert last_result.success is True
     # The envelope was recorded as a system message in session.messages.
@@ -232,9 +237,11 @@ def test_4_run_turn_no_double_append(tmp_path):
 
     # The agent index is 0; current_round is 0.
     session.is_running = True
-    orch._stop_event = False
+    orch._stop_event = threading.Event()
     msg = orch.run_turn(session)
-    assert msg is not None
+    # run_turn returns None for tool-call turns since the envelope
+    # message is recorded inside _process_tool_calls.
+    assert msg is None
 
     # The fake provider was called EXACTLY ONCE.
     assert orch._call_provider.call_count == 1, (

@@ -87,7 +87,7 @@ def _api_key_status(provider_name: str, value: str) -> str:
 _KEY_PREFIX_HINTS: dict[str, tuple[str, ...]] = {
     "openai": ("sk-",),
     "anthropic": ("sk-ant-",),
-    "openrouter": ("sk-or-v1-",),
+    "openrouter": ("sk-or-",),
     "cerebras": ("csk-",),
 }
 

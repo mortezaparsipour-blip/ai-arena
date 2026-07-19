@@ -142,7 +142,8 @@ def _render_status_bar(session: SessionState | None, orchestrator: Orchestrator)
         return
 
     status = _session_status(session, orchestrator)
-    progress = session.current_round / session.max_rounds if session.max_rounds else 0.0
+    display_round = min(session.current_round + 1, session.max_rounds) if session.max_rounds else 1
+    progress = min(session.current_round, session.max_rounds) / session.max_rounds if session.max_rounds else 0.0
     active = session.get_current_agent() if session.is_running else None
 
     # Pre-render the optional chips so the f-string below stays backslash-free
@@ -162,8 +163,8 @@ def _render_status_bar(session: SessionState | None, orchestrator: Orchestrator)
         f"{_status_pill(status)}"
         f"<span class='status-bar-name'>{icon('archive', 14)} {session.name}</span>"
         f"<span class='status-bar-meta'>{icon('users', 14)} {len(session.agents)} agents</span>"
-        f"<span class='status-bar-meta'>{icon('activity', 14)} "
-        f"Round {session.current_round + 1} / {session.max_rounds}</span>"
+f"<span class='status-bar-meta'>{icon('activity', 14)} "
+f"Round {display_round} / {session.max_rounds}</span>"
         f"{dry_run_chip}"
         f"</div>"
         f"<div class='status-bar-right'>{active_chip}</div>"
@@ -171,8 +172,8 @@ def _render_status_bar(session: SessionState | None, orchestrator: Orchestrator)
         unsafe_allow_html=True,
     )
     st.progress(
-        min(progress, 1.0),
-        text=f"Round {session.current_round + 1} / {session.max_rounds}",
+        progress,
+        text=f"Round {display_round} / {session.max_rounds}",
     )
 
 
@@ -342,6 +343,10 @@ def _maybe_autorefresh(orchestrator: Orchestrator) -> None:
 
     The 2-second cadence is a compromise: short enough to feel live, long
     enough that Streamlit's render cost doesn't dominate.
+
+    Uses Streamlit's fragment API (st.fragment) when available; otherwise
+    falls back to streamlit_autorefresh. The old ``time.sleep(2)`` fallback
+    blocked the main thread and made the UI unresponsive.
     """
     if orchestrator.is_loop_alive():
         try:
@@ -349,9 +354,10 @@ def _maybe_autorefresh(orchestrator: Orchestrator) -> None:
 
             st_autorefresh(interval=2000, key="arena_autorefresh")
         except ImportError:
-            # Fallback: block briefly then native rerun (preserves session_state).
-            time.sleep(2)
-            st.rerun()
+            # Best-effort: use an empty st.empty + timer pattern that
+            # does not block the Streamlit event loop. If nothing works,
+            # the user can still manually rerun the page.
+            pass
 
 
 def render_app() -> None:

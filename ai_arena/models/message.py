@@ -43,4 +43,6 @@ class Message:
             "round_number": self.round_number,
             "is_system": self.is_system,
             "context_diff": self.context_diff,
+            "had_tool_call": self.had_tool_call,
+            "tool_result": self.tool_result,
         }

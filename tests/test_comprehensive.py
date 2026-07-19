@@ -74,7 +74,7 @@ def test_full_middleware_flow():
     ctx_path = Path(session.context_file_path)
     assert ctx_path.exists()
     content = ctx_path.read_text(encoding="utf-8")
-    assert "Initial Prompt" in content
+    assert "Initial Task" in content
     assert "Test initial prompt" in content
     print("Context file verified")
 

@@ -151,6 +151,11 @@ class PatchFileTool(BaseTool):
         old_text = kwargs.get("old_text", "")
         new_text = kwargs.get("new_text", "")
         try:
+            if not old_text:
+                return ToolResult(
+                    success=False, output="",
+                    error="patch_file requires a non-empty 'old_text' argument.",
+                )
             p = _resolve_path(path)
             if not p.exists():
                 return ToolResult(success=False, output="", error=f"File not found: {path}")
@@ -194,11 +199,13 @@ class SummarizeContextTool(BaseTool):
             summary_parts = []
             total = 0
             for line in lines:
-                if total + len(line) > max_length:
+                # Account for the "\n" that join() will add between lines.
+                line_cost = len(line) + 1
+                if total + line_cost > max_length:
                     summary_parts.append("... [truncated]")
                     break
                 summary_parts.append(line)
-                total += len(line)
+                total += line_cost
             summary = "\n".join(summary_parts) if summary_parts else "[empty context]"
             return ToolResult(success=True, output=summary)
         except Exception as exc:

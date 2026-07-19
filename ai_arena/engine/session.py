@@ -39,12 +39,12 @@ class SessionManager:
         self._load_from_disk()
 
     def _save_lock(self, session_id: str) -> threading.Lock:
-        """Return (and lazily create) a per-session lock for atomic writes."""
-        lock = self._save_locks.get(session_id)
-        if lock is None:
-            lock = threading.Lock()
-            self._save_locks[session_id] = lock
-        return lock
+        """Return (and lazily create) a per-session lock for atomic writes.
+
+        Uses setdefault to avoid a TOCTOU race between two threads
+        creating a new lock for the same session concurrently.
+        """
+        return self._save_locks.setdefault(session_id, threading.Lock())
 
     def _load_from_disk(self) -> None:
         """Load every ``session_*.json`` file under ``storage_dir`` into memory.
@@ -145,6 +145,8 @@ class SessionManager:
             round_number=int(data.get("round_number", 0)),
             is_system=bool(data.get("is_system", False)),
             context_diff=data.get("context_diff"),
+            had_tool_call=bool(data.get("had_tool_call", False)),
+            tool_result=data.get("tool_result"),
         )
 
     @staticmethod

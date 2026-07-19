@@ -194,6 +194,6 @@ def has_tool_call(response_text: str) -> bool:
     if "```tool_call" in response_text.lower():
         return True
     for obj, _start, _end in _iter_json_objects(response_text):
-        if "tool" in obj:
+        if "tool" in obj and "arguments" in obj:
             return True
     return False

@@ -55,7 +55,7 @@ class Orchestrator:
         """
         self.session_manager = session_manager or SessionManager()
         self.rate_limiter = rate_limiter or RateLimiter()
-        self._stop_event = False
+        self._stop_event = threading.Event()
         self._state_lock = threading.Lock()
         self._loop_thread: Optional[threading.Thread] = None
         self._is_running: bool = False
@@ -182,7 +182,7 @@ class Orchestrator:
         messages: list[dict[str, str]] = []
 
         # System message with agent instructions and tool manual.
-        inject_tools = session.current_round == 0 and not tool_result_envelope
+        inject_tools = not tool_result_envelope
         system_content = self._build_system_prompt(
             agent, session=session, inject_tools=inject_tools
         )
@@ -339,7 +339,7 @@ class Orchestrator:
         if agent is None:
             return None
 
-        if self._stop_event:
+        if self._stop_event.is_set():
             return None
 
         # Wait for rate limit
@@ -365,7 +365,9 @@ class Orchestrator:
             )
             session.messages.append(error_msg)
             self.session_manager._save_session(session)
-            return error_msg
+            # Return None so step() does NOT advance past the failed agent.
+            # The loop will retry this agent on the next iteration.
+            return None
 
         # Process tool calls in the response (one shot per turn).
         # The orchestrator does NOT re-call the agent with the tool
@@ -377,33 +379,20 @@ class Orchestrator:
             response=response,
         )
 
+        # If final_response is None, a tool call was processed and
+        # _process_tool_calls already recorded the envelope message.
+        # Skip the duplicate message append.
         if final_response is None:
+            session.updated_at = datetime.now()
+            self.session_manager._save_session(session)
             return None
 
-        # File state is the source of truth. The agent updated the file
-        # via write_file (or made no change if it didn't call a tool).
-        # We do NOT call _append_agent_turn_to_context here — that was
-        # the old "append each turn's section" pattern which fights with
-        # the write_file-replace model and produced the "duplicated
-        # Critic/Optimist sections" bug.
-        #
-        # Compute a diff only for the UI; the file itself is already
-        # in its post-tool state.
-        had_tool = last_result is not None
-        diff: str | None = None
-        if had_tool and last_result is not None and last_result.success:
-            # Show the user what changed via a small diff string built
-            # from the tool envelope (it's the most useful summary).
-            diff = (last_result.output or "")[:200]
-
-        # Record message
+        # No tool call was processed — record a normal agent message.
         message = Message(
             agent_id=agent.id,
             agent_name=agent.name,
             content=final_response,
             round_number=session.current_round,
-            context_diff=diff,
-            had_tool_call=had_tool,
         )
         session.messages.append(message)
         session.updated_at = datetime.now()
@@ -443,7 +432,7 @@ class Orchestrator:
             when no tool call was processed. final_response is None if
             the session was stopped.
         """
-        if self._stop_event:
+        if self._stop_event.is_set():
             return None, None
 
         if not has_tool_call(response):
@@ -456,6 +445,9 @@ class Orchestrator:
 
         # Record the tool result envelope in the message log. We mark
         # it as a system message so the UI shows it under the SYS badge.
+        # Do NOT return the raw envelope as the agent message — that's
+        # internal protocol data. The caller (run_turn) will NOT append
+        # a duplicate message for tool-call turns.
         envelope_msg = Message(
             agent_id=agent.id,
             agent_name=agent.name,
@@ -463,11 +455,15 @@ class Orchestrator:
             round_number=session.current_round,
             is_system=True,
             had_tool_call=True,
+            tool_result=last_result.output,
         )
         session.messages.append(envelope_msg)
         self.session_manager._save_session(session)
 
-        return processed_response, last_result
+        # Return None as the agent response so run_turn skips the
+        # duplicate message append. The envelope_msg above is the
+        # sole record for this turn.
+        return None, last_result
 
     def start_session(
         self,
@@ -480,7 +476,7 @@ class Orchestrator:
             session: Session to start.
             initial_prompt: Optional initial prompt to seed the context.
         """
-        self._stop_event = False
+        self._stop_event.clear()
         session.is_running = True
         session.is_paused = False
         session.current_round = 0
@@ -521,14 +517,14 @@ class Orchestrator:
 
     def stop_session(self, session: SessionState) -> None:
         """Stop the orchestration loop."""
-        self._stop_event = True
+        self._stop_event.set()
         session.is_running = False
         session.is_paused = False
         self.session_manager._save_session(session)
 
     def pause_session(self, session: SessionState) -> None:
         """Pause the orchestration loop."""
-        self._stop_event = True
+        self._stop_event.set()
         session.is_paused = True
         session.is_running = False
         self.session_manager._save_session(session)
@@ -537,7 +533,7 @@ class Orchestrator:
         """Resume a paused session."""
         session.is_paused = False
         session.is_running = True
-        self._stop_event = False
+        self._stop_event.clear()
         self.session_manager._save_session(session)
 
     def step(self, session: SessionState) -> Optional[Message]:
@@ -573,7 +569,7 @@ class Orchestrator:
         """
         self._set_loop_running(True)
         try:
-            while session.is_running and not session.is_paused and not self._stop_event:
+            while session.is_running and not session.is_paused and not self._stop_event.is_set():
                 if session.is_complete():
                     session.is_running = False
                     break
