@@ -54,22 +54,29 @@ AI Arena is a modular multi-agent orchestration platform built with Python and S
 
 ## Data Flow
 
-The middleware flow for each agent turn:
+The middleware flow for each agent turn (one-shot per turn):
 
 ```
 1. Orchestrator selects next agent
-2. Agent is called with system prompt + tool manual + conversation history
+2. Agent is called with:
+   - System prompt (agent instructions + tool manual)
+   - User message: current file content inlined as a fenced code block
+     (agent does NOT need to call read_file — content is pre-injected)
 3. Response is received from the LLM
 4. Parser detects tool calls in the response
-   ├─ No tool call → forward response to next agent
-   └─ Tool call detected → execute via registry
-       ├─ Success → silently continue (no message injected)
+   ├─ No tool call → record agent message → advance to next agent
+   └─ Tool call detected → execute via registry (one shot, no re-call)
+       ├─ Success → record envelope as system message → advance
        └─ Failure → retry up to tool_max_retries (default 3)
-           ├─ Retry success → continue
+           ├─ Retry success → record envelope → advance
            └─ Max retries exceeded → error envelope, graceful degradation
-5. Context file is updated with the final response
+5. Context file is already updated (via write_file tool)
 6. Advance to next agent in the ping-pong loop
 ```
+
+> **Key design:** The orchestrator does NOT re-call the provider after a tool
+> call. Each agent turn is exactly one provider call. The file content is
+> injected into the user message so agents never need to call `read_file`.
 
 ## Key Design Decisions
 
@@ -94,9 +101,16 @@ The `BaseProvider` interface allows new LLM providers to be added without modify
 ### Why session-based state?
 Sessions are persisted to disk as JSON, enabling:
 - Multi-session support
-- Resume after restart
+- Resume after restart (stale running/paused flags are auto-reset)
 - Audit trail of all agent interactions
 - Export and sharing of completed sessions
+- Per-session save locks (thread-safe, TOCTOU-safe via `setdefault`)
+
+### Why threading.Event for stop control?
+The background loop uses a `threading.Event` instead of a plain bool to:
+- Provide proper memory barriers between threads
+- Enable `Event.wait(timeout)` for cooperative cancellation
+- Avoid relying on CPython's GIL for correctness
 
 ### Why tool-based file access?
 Instead of giving agents raw file system access, they use typed tools that:

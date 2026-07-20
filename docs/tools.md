@@ -68,18 +68,22 @@ When returning results to an AI, the app wraps them in a clearly labeled structu
 
 ## Middleware Flow
 
-For each agent turn, the app follows this middleware flow:
+For each agent turn, the app follows this one-shot middleware flow:
 
-1. **Call the agent** with system prompt + conversation history
+1. **Call the agent** with system prompt + tool manual + file content inlined in user message
 2. **Detect tool calls** in the response using the parser
-3. **If tool call detected:**
+3. **If tool call detected (one shot — no re-call):**
    - Execute the tool via the registry
-   - If success → silently continue (no message injected)
+   - If success → record envelope as system message, advance to next agent
    - If failure → retry up to `tool_max_retries` times (default: 3)
-   - If max retries exceeded → return error envelope, degrade gracefully
-4. **If no tool call** → forward response to next agent
-5. **Update context file** with the final response
+   - If max retries exceeded → record error envelope, degrade gracefully
+4. **If no tool call** → record agent message, advance to next agent
+5. **Context file is already updated** by the tool (e.g. `write_file`)
 6. **Advance to next agent** in the ping-pong loop
+
+> **Note:** The orchestrator does NOT re-call the provider after executing a
+> tool. Each turn is exactly one provider call. This prevents the "read loop"
+> bug where an agent would repeatedly call `read_file` in an inner loop.
 
 ### Retry Logic
 
@@ -149,7 +153,7 @@ Apply a search-and-replace patch to a file.
 
 **Parameters:**
 - `path` (string, required) — Path to the file to patch
-- `old_text` (string, required) — Text to search for and replace
+- `old_text` (string, required) — Text to search for and replace (must be non-empty)
 - `new_text` (string, required) — Replacement text
 
 **Returns:**
@@ -260,11 +264,11 @@ This enables full debugging and traceability of all tool interactions.
 
 ## Tool Manual Injection
 
-Before round 1 of each session, the app automatically injects a tool usage manual into each agent's system prompt. This manual is dynamically generated from the registered tools and includes:
+On every round, the app injects a tool usage manual into each agent's system prompt. This manual is dynamically generated from the registered tools and includes:
 
 - Available tool names and descriptions
 - Exact call format/syntax
 - Expected response format
 - What happens if a call is malformed
 
-The manual ensures every AI knows how to use tools before the session starts, eliminating ambiguity.
+The manual ensures every AI knows how to use tools on every turn, eliminating ambiguity.
