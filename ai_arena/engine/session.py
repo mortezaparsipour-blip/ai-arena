@@ -117,6 +117,8 @@ class SessionManager:
                 is_paused=bool(data.get("is_paused", False)),
                 is_dry_run=bool(data.get("is_dry_run", False)),
                 tool_max_retries=int(data.get("tool_max_retries", 3)),
+                consecutive_errors=int(data.get("consecutive_errors", 0)),
+                max_consecutive_errors=int(data.get("max_consecutive_errors", 3)),
                 initial_prompt=data.get("initial_prompt", ""),
                 created_at=self._parse_dt(data.get("created_at")),
                 updated_at=self._parse_dt(data.get("updated_at")),
@@ -176,7 +178,9 @@ class SessionManager:
         Args:
             name: Human-readable session name.
             agents: List of agents in this session.
-            max_rounds: Maximum ping-pong rounds.
+            max_rounds: Maximum ping-pong rounds. Clamped to ``>= 1``;
+                a non-positive value would make ``is_complete()`` True
+                before the first turn, ending the session instantly.
             rate_limit: Rate limit delay in seconds.
             context_file: Optional custom context file path.
             is_dry_run: Whether this is a dry-run session.
@@ -185,6 +189,13 @@ class SessionManager:
         Returns:
             The newly created session state.
         """
+        if max_rounds < 1:
+            max_rounds = 1
+        if rate_limit < 0:
+            rate_limit = 0
+        if tool_max_retries < 0:
+            tool_max_retries = 0
+
         session_id = str(uuid.uuid4())[:8]
         ctx_path = context_file or str(config.get_context_path(session_id))
 
@@ -287,6 +298,8 @@ class SessionManager:
             "is_paused": session.is_paused,
             "is_dry_run": session.is_dry_run,
             "tool_max_retries": session.tool_max_retries,
+            "consecutive_errors": session.consecutive_errors,
+            "max_consecutive_errors": session.max_consecutive_errors,
             "initial_prompt": session.initial_prompt,
             "created_at": session.created_at.isoformat(),
             "updated_at": session.updated_at.isoformat(),

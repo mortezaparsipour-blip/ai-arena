@@ -78,9 +78,15 @@ def test_full_middleware_flow():
     assert "Test initial prompt" in content
     print("Context file verified")
 
-    # Verify messages were recorded
-    assert len(session.messages) == 3
-    print(f"Messages recorded: {len(session.messages)}")
+    # Verify messages were recorded. Dry-run agents reply with prose
+    # (no write_file), so each turn now also emits a [WARNING] system
+    # message about the context not being updated — 2 messages per
+    # step × 3 steps = 6 total.
+    assert len(session.messages) == 6
+    agent_msgs = [m for m in session.messages if not m.is_system]
+    assert len(agent_msgs) == 3
+    print(f"Messages recorded: {len(session.messages)} ({len(agent_msgs)} agent, "
+          f"{len(session.messages) - len(agent_msgs)} system warnings)")
 
     # Verify dry-run responses
     assert "[DRY RUN]" in msg1.content

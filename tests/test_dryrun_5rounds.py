@@ -120,23 +120,34 @@ def main() -> int:
     failures = []
     if not reloaded.is_dry_run:
         failures.append("session.is_dry_run should be True")
-    if len(reloaded.messages) != 10:
-        failures.append(f"expected 10 messages (5 rounds × 2 agents), got {len(reloaded.messages)}")
+    # Each turn now emits an agent message + a [WARNING] system message
+    # (because the dry-run agent returns prose with no write_file call).
+    # 5 rounds × 2 agents × 2 messages/turn = 20 total.
+    agent_msgs = [m for m in reloaded.messages if not m.is_system]
+    warn_msgs = [m for m in reloaded.messages if "[WARNING]" in m.content]
+    if len(agent_msgs) != 10:
+        failures.append(
+            f"expected 10 agent messages (5 rounds × 2 agents), got {len(agent_msgs)}"
+        )
+    if len(warn_msgs) != 10:
+        failures.append(
+            f"expected 10 [WARNING] messages (one per prose-only turn), got {len(warn_msgs)}"
+        )
     if not reloaded.is_complete():
         failures.append("session should be complete after max_rounds")
     if reloaded.current_round != 5:
         failures.append(f"expected current_round=5, got {reloaded.current_round}")
-    # Verify alternating pattern between Alice and Bob
-    agent_order = [m.agent_name for m in reloaded.messages]
+    # Verify alternating pattern between Alice and Bob (agent messages only;
+    # the warning messages duplicate the same agent name per turn).
+    agent_order = [m.agent_name for m in agent_msgs]
     if len(agent_order) >= 2:
         expected_alternation = ["Alice", "Bob"] * 5  # 10-turn cycle
         if agent_order != expected_alternation:
             failures.append(
                 f"expected perfect Alice/Bob alternation over 10 turns, got {agent_order}"
             )
-    # Verify all responses contain [DRY RUN] marker
-    non_system = [m for m in reloaded.messages if not m.is_system]
-    if not all("[DRY RUN]" in m.content for m in non_system):
+    # Verify all agent responses contain [DRY RUN] marker
+    if not all("[DRY RUN]" in m.content for m in agent_msgs):
         failures.append("not all dry-run responses contained [DRY RUN] marker")
 
     if failures:

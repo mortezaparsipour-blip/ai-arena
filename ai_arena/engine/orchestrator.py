@@ -23,7 +23,7 @@ from ..models.message import Message
 from ..models.session_state import SessionState
 from ..providers.base import BaseProvider, ProviderError
 from ..tools.base import ToolResult
-from ..tools.file_tools import compute_diff
+from ..tools.file_tools import compute_diff, set_active_context_path
 from .session import SessionManager
 
 
@@ -279,43 +279,6 @@ class Orchestrator:
         ctx_path = Path(session.context_file_path)
         return ctx_path.read_text(encoding="utf-8") if ctx_path.exists() else ""
 
-    def _update_context(self, session: SessionState, content: str) -> tuple[str, str]:
-        """Update the shared context file with new content.
-
-        Args:
-            session: Current session state.
-            content: New content to write.
-
-        Returns:
-            Tuple of (new_content, diff_string).
-        """
-        ctx_path = Path(session.context_file_path)
-        old_content = self._read_context(session)
-        new_content = content
-        diff = compute_diff(old_content, new_content)
-        ctx_path.write_text(new_content, encoding="utf-8")
-        return new_content, diff
-
-    def _append_agent_turn_to_context(
-        self, context: str, agent: Agent, response: str, round_number: int
-    ) -> str:
-        """Append agent response to context file content.
-
-        Args:
-            context: Current context content.
-            agent: The agent that produced the response.
-            response: The agent's response text.
-            round_number: Current round number (1-indexed).
-
-        Returns:
-            Updated context content.
-        """
-        separator = "\n\n---\n\n"
-        entry = f"## {agent.name} (Round {round_number})\n\n{response}"
-        if context.strip():
-            return context + separator + entry
-        return entry
-
     def run_turn(
         self,
         session: SessionState,
@@ -345,6 +308,13 @@ class Orchestrator:
         # Wait for rate limit
         self.rate_limiter.wait()
 
+        # Bind the file-tool sandbox to this session's context file for
+        # the duration of the turn. Mutating tools (write/append/patch)
+        # will refuse any path that doesn't resolve to it, so a
+        # hallucinated ``write_file {"path": ".env"}`` is rejected
+        # before touching disk.
+        set_active_context_path(session.context_file_path)
+
         # Initialize tool executor for this turn
         executor = ToolExecutor(
             registry=self.tool_registry,
@@ -364,9 +334,22 @@ class Orchestrator:
                 is_system=True,
             )
             session.messages.append(error_msg)
+            # Bump the consecutive-error counter. If the threshold is
+            # reached, stop the session outright so a persistent failure
+            # (bad API key, dead endpoint) cannot spin the loop forever.
+            # Below the threshold, leave is_running True so transient
+            # failures (rate-limit, brief network blip) get another try.
+            should_stop = session.record_provider_error()
+            if should_stop:
+                session.is_running = False
+                self._set_last_error(
+                    f"Stopping after {session.max_consecutive_errors} consecutive "
+                    f"provider errors. Last: {exc}"
+                )
             self.session_manager._save_session(session)
-            # Return None so step() does NOT advance past the failed agent.
-            # The loop will retry this agent on the next iteration.
+            # Always return None so step() does NOT advance past the
+            # failed agent — the next iteration either retries the same
+            # agent or, once the threshold trips, exits via is_running.
             return None
 
         # Process tool calls in the response (one shot per turn).
@@ -383,7 +366,7 @@ class Orchestrator:
         # _process_tool_calls already recorded the envelope message.
         # Skip the duplicate message append.
         if final_response is None:
-            session.updated_at = datetime.now()
+            session.record_success()
             self.session_manager._save_session(session)
             return None
 
@@ -395,7 +378,25 @@ class Orchestrator:
             round_number=session.current_round,
         )
         session.messages.append(message)
-        session.updated_at = datetime.now()
+        # Surface a warning so the user knows this turn produced no
+        # file change. Without it, an agent that replies with prose
+        # looks indistinguishable from a successful rewrite — the next
+        # agent then re-reads an unchanged file and the session stalls
+        # without any visible signal. We DON'T fail the turn: prose is
+        # a valid response, just an unproductive one.
+        warning = Message(
+            agent_id=agent.id,
+            agent_name=agent.name,
+            content=(
+                f"[WARNING] {agent.name} did not call write_file this turn — "
+                f"the shared context was not updated. The next agent will see "
+                f"the same file state."
+            ),
+            round_number=session.current_round,
+            is_system=True,
+        )
+        session.messages.append(warning)
+        session.record_success()
         self.session_manager._save_session(session)
 
         return message
@@ -438,10 +439,25 @@ class Orchestrator:
         if not has_tool_call(response):
             return response, None
 
+        # Snapshot the context file BEFORE the tool runs. After execution
+        # we diff old vs new so the UI's "Diff" tab and the per-message
+        # "Context Diff" expander actually have something to show. This
+        # is the only place the orchestrator learns what the write
+        # changed — write_file itself just reports a byte count.
+        old_context = self._read_context(session)
+
         processed_response, had_tool, last_result = executor.process_response(response)
 
         if not had_tool or last_result is None:
             return response, None
+
+        # Compute the diff for the just-applied write (if any). Only
+        # surface a non-empty diff when the file actually changed, so
+        # the UI doesn't show noise for read-only or no-op tool calls.
+        new_context = self._read_context(session)
+        diff = ""
+        if new_context != old_context:
+            diff = compute_diff(old_context, new_context)
 
         # Record the tool result envelope in the message log. We mark
         # it as a system message so the UI shows it under the SYS badge.
@@ -456,6 +472,7 @@ class Orchestrator:
             is_system=True,
             had_tool_call=True,
             tool_result=last_result.output,
+            context_diff=diff or None,
         )
         session.messages.append(envelope_msg)
         self.session_manager._save_session(session)
@@ -482,6 +499,10 @@ class Orchestrator:
         session.current_round = 0
         session.current_agent_index = 0
         session.messages = []
+        # Fresh start: clear any stale error streak from a prior run so
+        # the loop doesn't immediately bail out because of failures that
+        # happened before the user hit Start again.
+        session.consecutive_errors = 0
         # Stash the task brief on the session so it can be sent to the
         # model as the first user message on round 0. The context file
         # itself stays as a clean skeleton — agents never see the
@@ -493,14 +514,23 @@ class Orchestrator:
         # protection still applies to the first call after a resume.
         self.rate_limiter.delay_seconds = float(session.rate_limit_seconds)
 
+        ctx_path = Path(session.context_file_path)
+        ctx_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # If the context file already holds agent work (not just a fresh
+        # seed), preserve a backup before we overwrite it. ``start_session``
+        # is "restart from scratch" semantics; users who wanted to pick
+        # up where they left off should hit Resume instead. But clicking
+        # Start by accident shouldn't be destructive — the snapshot is
+        # cheap insurance and lives next to the live file.
+        self._backup_context_if_needed(ctx_path)
+
         # Seed the context file with the initial task. The file is the
         # single source of truth: every subsequent agent reads the file
         # and rewrites it in full. The "## Initial Task" section must
         # be preserved verbatim by every rewrite so the task brief
         # never gets lost, and the "## Working Draft" section is the
         # area agents replace wholesale (write_file, not append_file).
-        ctx_path = Path(session.context_file_path)
-        ctx_path.parent.mkdir(parents=True, exist_ok=True)
         seed = (
             "# Shared Context\n\n"
             "## Initial Task\n"
@@ -514,6 +544,45 @@ class Orchestrator:
         ctx_path.write_text(seed, encoding="utf-8")
 
         self.session_manager._save_session(session)
+
+    @staticmethod
+    def _backup_context_if_needed(ctx_path: Path) -> None:
+        """Copy ``ctx_path`` to a ``.bak.md`` sibling if it holds real work.
+
+        "Real work" means the working draft has content beyond the seed
+        placeholder comment. A freshly seeded file (or an empty one) is
+        not backed up — there is nothing to lose.
+
+        Failures are swallowed: backups are best-effort safety nets and
+        must never block a start.
+        """
+        if not ctx_path.exists():
+            return
+        try:
+            content = ctx_path.read_text(encoding="utf-8")
+        except OSError:
+            return
+        # Skip if the working draft is empty / just the seed placeholder.
+        marker = "## Working Draft"
+        idx = content.find(marker)
+        if idx < 0:
+            return
+        body = content[idx + len(marker):]
+        # Strip the seed comment and whitespace; anything left means an
+        # agent wrote something worth keeping.
+        stripped = body.replace(
+            "<!-- Agents rewrite everything below this line. "
+            "Keep the # Shared Context header and the ## Initial Task "
+            "section above intact; replace the rest in full. -->",
+            "",
+        ).strip()
+        if not stripped:
+            return
+        backup_path = ctx_path.with_suffix(".bak.md")
+        try:
+            backup_path.write_text(content, encoding="utf-8")
+        except OSError:
+            pass
 
     def stop_session(self, session: SessionState) -> None:
         """Stop the orchestration loop."""
@@ -549,6 +618,16 @@ class Orchestrator:
             return None
         if session.is_complete():
             session.is_running = False
+            self.session_manager._save_session(session)
+            return None
+        # No enabled agents means the loop has nothing to do. Bail out
+        # instead of spinning forever calling run_turn → None.
+        if not session.has_enabled_agents():
+            session.is_running = False
+            self._set_last_error(
+                "Session has no enabled agents. Enable at least one agent "
+                "in the sidebar before starting."
+            )
             self.session_manager._save_session(session)
             return None
 

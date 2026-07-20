@@ -113,10 +113,22 @@ def render_chat_panel(messages: list[Message], current_agent: Any | None) -> Non
         )
         return
 
-    for msg in messages:
+    # The "live" badge should mark only the *latest* message from the
+    # currently active agent, not every message it ever produced.
+    # Otherwise older turns stay flagged "live" forever, which is
+    # misleading once the agent has handed off. Find the index of the
+    # last message owned by the active agent, then compare per-message.
+    live_index = -1
+    if current_agent is not None:
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].agent_id == current_agent.id:
+                live_index = i
+                break
+
+    for idx, msg in enumerate(messages):
         variant = _bubble_variant(msg)
         agent_color = _agent_color(msg.agent_id)
-        is_current = current_agent and msg.agent_id == current_agent.id
+        is_current = idx == live_index
         display_name, badge_text = _bubble_label(msg)
         bg_color = msg_color_for(variant, agent_color)
 

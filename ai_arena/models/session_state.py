@@ -52,6 +52,14 @@ class SessionState:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     tool_max_retries: int = 3
+    # Consecutive provider-failure counter. Incremented on every
+    # ProviderError, reset to 0 on any successful turn. When it reaches
+    # ``max_consecutive_errors`` the orchestrator stops the session so a
+    # persistent failure (bad API key, dead endpoint) cannot pin the
+    # loop in an infinite retry storm. Transient failures (rate-limit,
+    # brief network blip) get a few retries before giving up.
+    consecutive_errors: int = 0
+    max_consecutive_errors: int = 3
 
     def get_active_agents(self) -> list[Agent]:
         """Return only enabled agents in order."""
@@ -85,3 +93,34 @@ class SessionState:
     def is_complete(self) -> bool:
         """Check if the session has completed all rounds."""
         return self.current_round >= self.max_rounds
+
+    def record_provider_error(self) -> bool:
+        """Increment the consecutive-error counter.
+
+        Returns:
+            True if the threshold has been reached and the session
+            should stop, False if more retries are allowed.
+        """
+        self.consecutive_errors += 1
+        self.updated_at = datetime.now()
+        return self.consecutive_errors >= self.max_consecutive_errors
+
+    def record_success(self) -> None:
+        """Reset the consecutive-error counter after a successful turn.
+
+        A single success anywhere in the loop is enough to clear the
+        streak — we only want to stop when failures pile up
+        back-to-back.
+        """
+        if self.consecutive_errors:
+            self.consecutive_errors = 0
+            self.updated_at = datetime.now()
+
+    def has_enabled_agents(self) -> bool:
+        """Return whether at least one agent is enabled.
+
+        The orchestration loop relies on ``get_current_agent`` returning
+        a non-None agent; without one it would spin forever advancing
+        nowhere. This predicate lets callers bail out cleanly.
+        """
+        return any(a.enabled for a in self.agents)

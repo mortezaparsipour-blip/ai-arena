@@ -718,8 +718,3 @@ def render_app() -> None:
 
     # --- Run bar (prompt + controls + export) -----------------------------
     _render_run_bar(orchestrator, session)
-
-
-def _empty_metrics_html() -> str:
-    # Kept for backwards compatibility; the metrics column no longer exists.
-    return ""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,41 @@ from .base import BaseTool, ToolError, ToolResult
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+# ---------------------------------------------------------------------------
+# Sandbox: per-turn write scope
+# ---------------------------------------------------------------------------
+# Agents collaborate on a single shared context file. Letting them write
+# anywhere on disk is both unnecessary and dangerous — a hallucinated
+# ``write_file {"path": ".env", ...}`` would silently clobber secrets, and
+# even a benign-looking ``poem.txt`` path (which the model often invents
+# from prompt examples) pollutes the repo root.
+#
+# The orchestrator sets the active context path before each turn; mutating
+# tools (write/append/patch) refuse to touch anything that doesn't resolve
+# to that path. Reads stay unrestricted inside the project root so agents
+# can still inspect documentation or their own earlier output.
+_lock = threading.Lock()
+_active_context_path: Path | None = None
+
+
+def set_active_context_path(path: str | Path | None) -> None:
+    """Set the only file mutating tools may write to for the next turn.
+
+    Called by the orchestrator at the start of every turn with the
+    session's context file. Pass ``None`` to disable the sandbox (used by
+    tests that exercise tools directly without a session).
+    """
+    global _active_context_path
+    with _lock:
+        _active_context_path = Path(path).resolve() if path else None
+
+
+def get_active_context_path() -> Path | None:
+    """Return the currently sandboxed write target, if any."""
+    with _lock:
+        return _active_context_path
+
+
 def _resolve_path(raw_path: str) -> Path:
     """Resolve ``raw_path`` against the project root when it is relative.
 
@@ -30,6 +66,65 @@ def _resolve_path(raw_path: str) -> Path:
     if p.is_absolute():
         return p
     return _PROJECT_ROOT / p
+
+
+def _enforce_write_scope(raw_path: str) -> Path | None:
+    """Resolve ``raw_path`` and verify it's within the write sandbox.
+
+    Returns:
+        The resolved absolute Path if the write is allowed.
+
+    Raises:
+        ToolError: Always; ``_enforce_write_scope`` returns the path on
+            success but signals rejection by raising so callers can simply
+            ``return ToolResult(success=False, ...)`` from the caught
+            error. (Kept as a helper so each tool doesn't reimplement the
+            check.)
+    """
+    resolved = _resolve_path(raw_path).resolve()
+    target = get_active_context_path()
+    if target is None:
+        # Sandbox disabled (no session bound) — allow the write so direct
+        # tool usage and tests still work. The orchestrator always binds
+        # a target in production, so this branch is test-only.
+        return resolved
+    if resolved == target:
+        return resolved
+    # Reject. The error text echoes the *allowed* path so the model can
+    # self-correct on retry without guessing.
+    raise ToolError(
+        f"write rejected: '{raw_path}' is outside the session's context "
+        f"file. You may only write to: {target}."
+    )
+
+
+def _enforce_read_scope(raw_path: str) -> Path:
+    """Resolve ``raw_path`` and verify a read stays inside the project root.
+
+    Reads are intentionally more permissive than writes (agents may inspect
+    docs, sys_prompts, etc.), but they still must not escape the project
+    tree — that would let a prompted agent exfiltrate ``~/.ssh/id_rsa``
+    or ``/etc/passwd`` contents into the context file.
+
+    The check only applies when a session is bound (i.e. the sandbox is
+    active). Direct ``ToolExecutor`` usage in tests, without an
+    orchestrator binding a context path, skips the check so legacy
+    callers can still read arbitrary paths.
+    """
+    resolved = _resolve_path(raw_path).resolve()
+    # Only enforce when the write sandbox is also active — that signals
+    # we're inside a real session. Test code and CLI scripts that use
+    # the tools standalone shouldn't be constrained.
+    if get_active_context_path() is None:
+        return resolved
+    try:
+        resolved.relative_to(_PROJECT_ROOT)
+    except ValueError as exc:
+        raise ToolError(
+            f"read rejected: '{raw_path}' is outside the project root "
+            f"({_PROJECT_ROOT})."
+        ) from exc
+    return resolved
 
 
 class ReadFileTool(BaseTool):
@@ -51,7 +146,8 @@ class ReadFileTool(BaseTool):
     def execute(self, **kwargs: Any) -> ToolResult:
         path = kwargs.get("path", "")
         try:
-            content = _resolve_path(path).read_text(encoding="utf-8")
+            resolved = _enforce_read_scope(path)
+            content = resolved.read_text(encoding="utf-8")
             return ToolResult(success=True, output=content)
         except Exception as exc:
             return ToolResult(success=False, output="", error=f"Failed to read file: {exc}")
@@ -81,7 +177,12 @@ class WriteFileTool(BaseTool):
         path = kwargs.get("path", "")
         content = kwargs.get("content", "")
         try:
-            resolved = _resolve_path(path)
+            resolved = _enforce_write_scope(path)
+            if resolved is None:
+                return ToolResult(
+                    success=False, output="",
+                    error="write_file: no session context bound.",
+                )
             resolved.parent.mkdir(parents=True, exist_ok=True)
             resolved.write_text(content, encoding="utf-8")
             return ToolResult(success=True, output=f"Successfully wrote {len(content)} characters to {path}")
@@ -113,9 +214,14 @@ class AppendFileTool(BaseTool):
         path = kwargs.get("path", "")
         content = kwargs.get("content", "")
         try:
-            p = _resolve_path(path)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            with p.open("a", encoding="utf-8") as f:
+            resolved = _enforce_write_scope(path)
+            if resolved is None:
+                return ToolResult(
+                    success=False, output="",
+                    error="append_file: no session context bound.",
+                )
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            with resolved.open("a", encoding="utf-8") as f:
                 f.write(content)
             return ToolResult(success=True, output=f"Successfully appended {len(content)} characters to {path}")
         except Exception as exc:
@@ -156,15 +262,20 @@ class PatchFileTool(BaseTool):
                     success=False, output="",
                     error="patch_file requires a non-empty 'old_text' argument.",
                 )
-            p = _resolve_path(path)
-            if not p.exists():
+            resolved = _enforce_write_scope(path)
+            if resolved is None:
+                return ToolResult(
+                    success=False, output="",
+                    error="patch_file: no session context bound.",
+                )
+            if not resolved.exists():
                 return ToolResult(success=False, output="", error=f"File not found: {path}")
-            content = p.read_text(encoding="utf-8")
+            content = resolved.read_text(encoding="utf-8")
             count = content.count(old_text)
             if count == 0:
                 return ToolResult(success=False, output="", error=f"Pattern not found in file: {old_text[:100]}")
             new_content = content.replace(old_text, new_text)
-            p.write_text(new_content, encoding="utf-8")
+            resolved.write_text(new_content, encoding="utf-8")
             return ToolResult(success=True, output=f"Patched {count} occurrence(s) in {path}")
         except Exception as exc:
             return ToolResult(success=False, output="", error=f"Failed to patch file: {exc}")
@@ -194,7 +305,8 @@ class SummarizeContextTool(BaseTool):
         path = kwargs.get("path", "")
         max_length = kwargs.get("max_length", 500)
         try:
-            content = _resolve_path(path).read_text(encoding="utf-8")
+            resolved = _enforce_read_scope(path)
+            content = resolved.read_text(encoding="utf-8")
             lines = content.strip().splitlines()
             summary_parts = []
             total = 0
