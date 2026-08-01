@@ -1,16 +1,16 @@
-# Graph Report - ai-arena  (2026-07-19)
+# Graph Report - ai-arena  (2026-07-20)
 
 ## Corpus Check
-- 60 files · ~29,852 words
+- 58 files · ~30,650 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 725 nodes · 1327 edges · 47 communities (40 shown, 7 thin omitted)
-- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 65 edges (avg confidence: 0.53)
+- 729 nodes · 1608 edges · 55 communities (44 shown, 11 thin omitted)
+- Extraction: 86% EXTRACTED · 14% INFERRED · 0% AMBIGUOUS · INFERRED: 223 edges (avg confidence: 0.51)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `e4b38a0f`
+- Built from commit: `3265f14b`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -62,59 +62,67 @@
 - [[_COMMUNITY_.get_active_session|.get_active_session]]
 - [[_COMMUNITY_graphify|graphify]]
 - [[_COMMUNITY_.start_background|.start_background]]
+- [[_COMMUNITY__AlwaysFail|_AlwaysFail]]
+- [[_COMMUNITY__AlwaysProse|_AlwaysProse]]
+- [[_COMMUNITY_._call_provider|._call_provider]]
+- [[_COMMUNITY_.get|.get]]
+- [[_COMMUNITY_.advance|.advance]]
+- [[_COMMUNITY__make_session|_make_session]]
+- [[_COMMUNITY_.execute|.execute]]
+- [[_COMMUNITY_.resume_session|.resume_session]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `Orchestrator` - 55 edges
-2. `Agent` - 42 edges
-3. `SessionState` - 41 edges
-4. `SessionManager` - 36 edges
-5. `ProviderError` - 27 edges
-6. `ToolResult` - 26 edges
-7. `ToolRegistry` - 25 edges
-8. `BaseProvider` - 22 edges
-9. `OpenRouterProvider` - 22 edges
-10. `parse_tool_call()` - 21 edges
+1. `Orchestrator` - 77 edges
+2. `Agent` - 69 edges
+3. `SessionManager` - 61 edges
+4. `SessionState` - 58 edges
+5. `ProviderError` - 41 edges
+6. `ToolRegistry` - 39 edges
+7. `BaseProvider` - 35 edges
+8. `Message` - 34 edges
+9. `WriteFileTool` - 27 edges
+10. `AgentRole` - 26 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `_CapturingProvider` --uses--> `Orchestrator`  [INFERRED]
+  tests/test_fixes.py → ai_arena/engine/orchestrator.py
+- `test_orchestrator_thread_safe_accessors()` --calls--> `Orchestrator`  [EXTRACTED]
   tests/test_fixes.py → ai_arena/engine/orchestrator.py
 - `_make_orch()` --indirect_call--> `Orchestrator`  [INFERRED]
   tests/test_one_shot_flow.py → ai_arena/engine/orchestrator.py
 - `_NoToolRegistry` --uses--> `Orchestrator`  [INFERRED]
   tests/test_one_shot_flow.py → ai_arena/engine/orchestrator.py
-- `_CapturingProvider` --uses--> `RateLimiter`  [INFERRED]
-  tests/test_fixes.py → ai_arena/engine/rate_limiter.py
-- `_NoToolRegistry` --uses--> `SessionManager`  [INFERRED]
-  tests/test_one_shot_flow.py → ai_arena/engine/session.py
+- `_AlwaysFail` --uses--> `Orchestrator`  [INFERRED]
+  tests/test_regression_v2.py → ai_arena/engine/orchestrator.py
 
 ## Import Cycles
 - None detected.
 
-## Communities (47 total, 7 thin omitted)
+## Communities (55 total, 11 thin omitted)
 
 ### Community 0 - "ToolRegistry"
 Cohesion: 0.15
-Nodes (15): Session manager for multi-session support., AgentRole, Agent model representing an AI agent in the orchestration loop., AI Arena models package., Message, Message model for conversation history., Represents a single message in the conversation history.      Attributes:, Serialize message to dictionary. (+7 more)
+Nodes (12): AgentRole, Agent model representing an AI agent in the orchestration loop., AI Arena models package., Message, Represents a single message in the conversation history.      Attributes:, Serialize message to dictionary., Session state model for managing orchestration sessions., Enum (+4 more)
 
 ### Community 1 - "ToolResult"
-Cohesion: 0.08
-Nodes (36): ABC, Tool registry for AI Arena.  Single source of truth for all available tools. Add, Register the default file manipulation tools., Register a tool by its name.          Args:             tool: Tool instance to r, BaseTool, Any, Base tool abstraction and result types., Raised when a tool execution fails. (+28 more)
+Cohesion: 0.17
+Nodes (6): OpenRouterProvider, Any, Validate OpenRouter API key., OpenRouter API provider supporting free and paid models., Initialize OpenRouter provider., Send messages to OpenRouter and return response text.
 
 ### Community 2 - "ProviderError"
-Cohesion: 0.11
-Nodes (17): ProviderError, Raised when a provider encounters an error., OpenRouterProvider, Any, Validate OpenRouter API key., OpenRouter API provider supporting free and paid models., Initialize OpenRouter provider., Send messages to OpenRouter and return response text. (+9 more)
+Cohesion: 0.21
+Nodes (11): ProviderError, Raised when a provider encounters an error., _patch_openrouter_client(), provider(), OpenRouter provider tests., test_auth_error_maps_to_authentication(), test_chat_requires_api_key(), test_chat_requires_openai_package() (+3 more)
 
 ### Community 3 - "How to Add a New Provider"
 Cohesion: 0.05
-Nodes (39): Advanced: Programmatic Agent Creation, Agent Configuration Fields, Agent Roles, Agent Turn Order, Example: Adding a Researcher Agent, How to Add a New Agent, Quick Start, BaseProvider Interface (+31 more)
+Nodes (40): Advanced: Programmatic Agent Creation, Agent Configuration Fields, Agent Roles, Agent Turn Order, Example: Adding a Researcher Agent, How to Add a New Agent, Quick Start, BaseProvider Interface (+32 more)
 
 ### Community 4 - "Configuration Guide"
 Cohesion: 0.10
 Nodes (21): Agent Configuration, API Key, API Keys, Configuration Guide, Creating Custom Prompts, Creating Sessions, Deleting Sessions, Dry-run Mode (+13 more)
 
 ### Community 5 - "BaseProvider"
-Cohesion: 0.18
-Nodes (6): OpenAIProvider, Any, Send messages to OpenAI and return response text., Validate OpenAI API key., get_available_providers(), Return mapping of provider name to provider instance.
+Cohesion: 0.13
+Nodes (20): Executes tool calls with retry logic and audit logging.      The executor:, Initialize tool executor.          Args:             registry: Tool registry, ToolExecutor, Tool registry for AI Arena.  Single source of truth for all available tools. Add, Central registry for all available agent tools.      Tools are registered once a, Register a tool by its name.          Args:             tool: Tool instance to r, ToolRegistry, compute_diff() (+12 more)
 
 ### Community 6 - "Tool System Documentation"
 Cohesion: 0.10
@@ -125,24 +133,28 @@ Cohesion: 0.18
 Nodes (9): Lucide-style SVG icon library for AI Arena UI.  Each icon is a 24x24 stroked S, compute_step(), Any, Workflow step indicator for AI Arena UI.  A small horizontal progress strip that, Return the current workflow step (0..3) for a session/orchestrator.      Defensi, Return the CSS state class for step ``idx`` given ``current``., Render the horizontal workflow step indicator.      Args:         current: The a, render_step_indicator() (+1 more)
 
 ### Community 8 - ".run_turn"
-Cohesion: 0.23
-Nodes (17): Agent, Represents a configurable AI agent.      Attributes:         id: Unique identifi, Serialize agent to dictionary., _make_orch(), _make_session(), _NoToolRegistry, Smoke tests for the "one-shot per turn" orchestrator refactor.  Covers: 1. _buil, _process_tool_calls must NOT re-call the provider. It returns     after exactly (+9 more)
+Cohesion: 0.32
+Nodes (13): _make_orch(), _make_session(), Smoke tests for the "one-shot per turn" orchestrator refactor.  Covers: 1. _buil, _process_tool_calls must NOT re-call the provider. It returns     after exactly, When the agent already called write_file, run_turn must NOT     call _append_age, The user message must contain the file content as a fenced block —     that's ho, run_all(), test_1_start_session_seeds_file() (+5 more)
 
 ### Community 9 - "RateLimiter"
 Cohesion: 0.18
-Nodes (7): Initialize orchestrator.          Args:             session_manager: Session, RateLimiter, Thread-safe rate limiter enforcing a minimum delay between calls.      Uses a si, Initialize rate limiter.          Args:             delay_seconds: Minimum secon, Block until the rate limit allows a call.          Returns:             The actu, Reset the rate limiter, allowing an immediate call., test_rate_limiter_preserves_last_call()
+Nodes (6): OpenAIProvider, Any, Send messages to OpenAI and return response text., Validate OpenAI API key., get_available_providers(), Return mapping of provider name to provider instance.
+
+### Community 10 - "SessionState"
+Cohesion: 0.19
+Nodes (11): Manages multiple named orchestration sessions.      Sessions are persisted to di, Set the active session by ID.          Returns:             True if session exis, SessionManager, Agent, Represents a configurable AI agent.      Attributes:         id: Unique identifi, Serialize agent to dictionary., Path, 2 errors → 1 success → 3 more errors should total 5 errors. (+3 more)
 
 ### Community 11 - "Agent"
-Cohesion: 0.22
-Nodes (12): Manages multiple named orchestration sessions.      Sessions are persisted to di, SessionManager, _CapturingProvider, Path, Regression tests for the 2026-07-15 review fixes.  Covers: - P0-1: SessionManage, OpenAIProvider subclass that records the kwargs it was called with,     so we ca, test_orchestrator_forwards_max_tokens(), test_parser_json_fence_with_nested_args() (+4 more)
+Cohesion: 0.10
+Nodes (18): Initialize orchestrator.          Args:             session_manager: Session, RateLimiter, Thread-safe rate limiter enforcing a minimum delay between calls.      Uses a si, Initialize rate limiter.          Args:             delay_seconds: Minimum secon, Block until the rate limit allows a call.          Returns:             The actu, Reset the rate limiter, allowing an immediate call., _CapturingProvider, Path (+10 more)
 
 ### Community 12 - "app.py"
-Cohesion: 0.14
+Cohesion: 0.15
 Nodes (16): _consume_loop_error(), _get_session_manager(), _init_session_state(), _maybe_autorefresh(), Main Streamlit application for AI Arena.  Layout (responsive, collapses gracef, Render the onboarding card shown when no session is active., If a session is running, schedule a rerun every 2s to refresh the UI.      The, Main entry point for the Streamlit application. (+8 more)
 
 ### Community 13 - "Orchestrator"
-Cohesion: 0.09
-Nodes (15): Orchestrator, Get a registered provider by name., Return list of registered provider names., Call the provider API for the given agent.          Args:             agent:, Generate a simulated response for dry-run mode.          Args:             ag, Append agent response to context file content.          Args:             con, Main orchestration engine acting as middleware between AI agents.      The mid, Execute a single agent turn with full middleware logic.          The middlewar (+7 more)
+Cohesion: 0.12
+Nodes (9): Orchestrator, Return list of registered provider names., Main orchestration engine acting as middleware between AI agents.      The mid, Stop the orchestration loop., Pause the orchestration loop., Return whether the background loop is currently executing., Return whether the background thread has been started and is alive., Test a complete middleware flow with tool calls. (+1 more)
 
 ### Community 14 - "AppConfig"
 Cohesion: 0.18
@@ -150,19 +162,19 @@ Nodes (8): AppConfig, Path, Global application configuration.      Attributes:  
 
 ### Community 15 - "SessionManager"
 Cohesion: 0.11
-Nodes (12): Start the orchestration loop for a session.          Args:             sessio, Stop the orchestration loop., Pause the orchestration loop., Resume a paused session., Spawn the orchestration loop in a daemon thread.          Returns the thread h, Represents the full state of an orchestration session.      Attributes:, Return only enabled agents in order., Return the currently active agent. (+4 more)
+Nodes (12): Retrieve a session by ID., Return the currently active session., Reset the consecutive-error counter after a successful turn.          A single s, Return whether at least one agent is enabled.          The orchestration loop re, Represents the full state of an orchestration session.      Attributes:, Return only enabled agents in order., Return the currently active agent., Advance to the next agent, cycling through rounds.          Returns: (+4 more)
 
 ### Community 16 - ".create_session"
-Cohesion: 0.07
-Nodes (29): 10. No `prefers-reduced-motion` support ✅ **FIXED**, 11. Three equal columns break on mobile ✅ **IMPROVED**, 12. No download/copy for the context file ✅ **FIXED**, 13. Chat badge readability ✅ **FIXED**, 14. Touch targets too small ✅ **FIXED**, 1. `hash()` bug — agent color changes on every rerun ✅ **FIXED**, 2. Redundant H1 — two titles for the same thing ✅ **FIXED**, 3. Export writes to disk instead of offering a browser download ✅ **FIXED** (+21 more)
+Cohesion: 0.33
+Nodes (8): _last_diff(), Any, Context panel for AI Arena UI.  Displays the live shared context file, the mos, Return an HTML status chip for the context panel header., Return the most recent non-empty context diff, or '' if none., Render the shared context file view in the right panel.      Args:         se, render_context_panel(), _status_badge()
 
 ### Community 17 - "._call_provider"
-Cohesion: 0.12
-Nodes (15): `ai_arena/engine/orchestrator.py`, Changes, Design rules, Execution order, File format (after `start_session`), Files not touched, Files touched, Goal (+7 more)
+Cohesion: 0.22
+Nodes (8): Changelog, Fixed (15 bugs), HIGH, LOW, MEDIUM, Removed, Tests, [Unreleased] - 2026-07-20
 
 ### Community 18 - ".get"
-Cohesion: 0.10
-Nodes (19): AI Arena — Review & Fix Plan (2026-07-15), Out of scope (acknowledged but deferred), P0-1. SessionManager never reloads from disk, P0-2. Tool parser regex rejects nested JSON, P0-3. Background thread writes to st.session_state (race), P0-4. `start_session` resets RateLimiter state, P0 — Critical Bugs (must fix), P1-5. Audit log silently swallows IO errors (+11 more)
+Cohesion: 0.32
+Nodes (3): Execute a single agent turn with full middleware logic.          The middlewar, Execute a single step (one agent turn).          Args:             session: C, Background loop body. Designed to run in a daemon thread.          Exits when
 
 ### Community 19 - "Critic Agent System Prompt"
 Cohesion: 0.25
@@ -173,8 +185,8 @@ Cohesion: 0.25
 Nodes (7): File format you can rely on, Mandatory workflow, Optimist — System Prompt, Rules, Runtime context, Tool call format, Working-draft template (replace with your synthesis)
 
 ### Community 21 - "._build_system_prompt"
-Cohesion: 0.20
-Nodes (5): Get the auto-generated tool manual for prompt injection.          Returns:, Build the system prompt for an agent.          Args:             agent: The a, Build the message list for a provider API call.          The model sees ONLY t, Read the current shared context file.          Args:             session: Cur, Update the shared context file with new content.          Args:             s
+Cohesion: 0.33
+Nodes (3): Get the auto-generated tool manual for prompt injection.          Returns:, Build the system prompt for an agent.          Args:             agent: The a, Build the message list for a provider API call.          The model sees ONLY t
 
 ### Community 22 - "Summarizer Agent System Prompt"
 Cohesion: 0.25
@@ -186,23 +198,23 @@ Nodes (7): File format you can rely on, Mandatory workflow, Rules, Runtime conte
 
 ### Community 24 - ".chat"
 Cohesion: 0.13
-Nodes (9): Register a provider by name., BaseProvider, Any, Abstract base class for AI providers.      Subclasses must implement the chat me, Send messages to the LLM and return the response text.          Args:, Validate that an API key is usable.          Args:             api_key: The API, Return the provider display name., Return the default model for this provider. (+1 more)
+Nodes (14): ABC, Anthropic provider implementation., BaseProvider, Base provider abstraction for AI Arena., Abstract base class for AI providers.      Subclasses must implement the chat me, Validate that an API key is usable.          Args:             api_key: The API, Return the provider display name., Return the default model for this provider. (+6 more)
 
 ### Community 25 - "Initial Prompt"
 Cohesion: 0.15
 Nodes (18): _agent_color(), _bubble_badge(), _bubble_label(), _bubble_variant(), get_agent_color(), msg_color_for(), Any, Chat panel for AI Arena UI.  Displays the conversation history between agents wi (+10 more)
 
 ### Community 29 - "AuditLogger"
-Cohesion: 0.05
-Nodes (61): Configuration management for AI Arena.  Supports loading from environment variab, Engine package for AI Arena., Core orchestration engine for AI Arena.  The Orchestrator acts as middleware b, Rate limiter for enforcing delays between API calls., AuditLogger, build_tool_error_envelope(), build_tool_result_envelope(), Any (+53 more)
+Cohesion: 0.11
+Nodes (29): Configuration management for AI Arena.  Supports loading from environment variab, Engine package for AI Arena., Core orchestration engine for AI Arena.  The Orchestrator acts as middleware b, Rate limiter for enforcing delays between API calls., Session manager for multi-session support., build_tool_result_envelope(), Tool executor with retry logic and audit logging for AI Arena.  Executes tool, Wrap a tool result in a labeled envelope for AI consumption.      Args: (+21 more)
 
 ### Community 30 - "راهنمای Deploy بر روی Railway"
 Cohesion: 0.13
 Nodes (14): Environment Variables (Optional), اگه دوست داری ریپو رو Public کنی:, حل ۱: Railway Volumes استفاده کن, حل ۲: ساخت Database ابتدایی, خودکار Updates, راهنمای Deploy بر روی Railway, مرحله ۱: ثبت‌نام, مرحله ۲: Connect GitHub Repo (+6 more)
 
 ### Community 31 - "._deserialize"
-Cohesion: 0.20
-Nodes (7): Any, Rebuild a Message from a dict, tolerating missing optional fields., Parse an ISO-8601 timestamp string, falling back to ``now``., List all sessions with metadata., Build a SessionState from a persisted dict.          Returns None if the dict is, Create agent from dictionary., test_agent_max_tokens_round_trip()
+Cohesion: 0.12
+Nodes (11): Any, Path, Rebuild a Message from a dict, tolerating missing optional fields., Parse an ISO-8601 timestamp string, falling back to ``now``., List all sessions with metadata., Delete a session and its context file.          Returns:             True if del, Initialize session manager.          Args:             storage_dir: Directory fo, Load every ``session_*.json`` file under ``storage_dir`` into memory.          T (+3 more)
 
 ### Community 32 - "config_panel.py"
 Cohesion: 0.19
@@ -213,64 +225,76 @@ Cohesion: 0.17
 Nodes (7): AnthropicProvider, Any, Anthropic Claude API provider., Send messages to Anthropic and return response text., Validate Anthropic API key., _get_orchestrator(), Get or create the orchestrator, persisting it in session state.
 
 ### Community 34 - ".create_session"
-Cohesion: 0.15
-Nodes (8): Path, Create a new session.          Args:             name: Human-readable session na, Delete a session and its context file.          Returns:             True if del, Persist session state to disk atomically.          Writes to ``session_<id>.json, Initialize session manager.          Args:             storage_dir: Directory fo, Return (and lazily create) a per-session lock for atomic writes., Load every ``session_*.json`` file under ``storage_dir`` into memory.          T, Lock
+Cohesion: 0.29
+Nodes (4): Create a new session.          Args:             name: Human-readable session na, Persist session state to disk atomically.          Writes to ``session_<id>.json, Return (and lazily create) a per-session lock for atomic writes.          Uses s, Lock
 
 ### Community 35 - "CerebrasProvider"
-Cohesion: 0.17
-Nodes (6): CerebrasProvider, Any, Cerebras Cloud API provider for high-speed open model inference., Initialize Cerebras provider., Send messages to Cerebras and return response text., Validate Cerebras API key.
+Cohesion: 0.14
+Nodes (9): CerebrasProvider, Any, Cerebras Cloud API provider for high-speed open model inference., Initialize Cerebras provider., Send messages to Cerebras and return response text., Validate Cerebras API key., build_agents(), main() (+1 more)
 
 ### Community 36 - "test_providers_live.py"
 Cohesion: 0.21
 Nodes (11): Real-API provider tests.  These tests make real network calls and consume small, Real Cerebras chat call., Real Anthropic chat call (currently skipped — no key)., Emit a one-line report. Truncated for readability., Real OpenAI chat call., Real OpenRouter chat call.      The user's ``.env`` puts an OpenRouter key under, _report(), test_live_anthropic() (+3 more)
 
 ### Community 37 - "MockProvider"
-Cohesion: 0.23
-Nodes (7): Anthropic provider implementation., Base provider abstraction for AI Arena., Cerebras provider implementation.  Cerebras Cloud provides high-speed inferenc, Providers package for AI Arena., OpenAI provider implementation., OpenRouter provider implementation.  OpenRouter provides access to many free mod, Configuration panel for AI Arena UI.  Handles provider selection, API keys, mode
+Cohesion: 0.10
+Nodes (18): AuditLogger, build_tool_error_envelope(), Any, Log a tool call attempt., Log a tool execution result., Process an AI response for tool calls.          Args:             response_te, Execute a tool call with retry logic.          Args:             tool_call: P, Execute a tool directly by name.          Args:             tool_name: Name o (+10 more)
 
 ### Community 38 - "tool_executor.py"
 Cohesion: 0.33
 Nodes (6): Render the playback control cluster (Start/Pause/Resume/Stop).      Returned s, Render the bottom run bar: prompt area on the left, controls + export     on th, Render download button for session export., render_control_buttons(), _render_export_button(), _render_run_bar()
 
 ### Community 39 - "._save_session"
-Cohesion: 0.33
-Nodes (8): _last_diff(), Any, Context panel for AI Arena UI.  Displays the live shared context file, the mos, Return an HTML status chip for the context panel header., Return the most recent non-empty context diff, or '' if none., Render the shared context file view in the right panel.      Args:         se, render_context_panel(), _status_badge()
+Cohesion: 0.10
+Nodes (26): BaseTool, Any, Base tool abstraction and result types., Raised when a tool execution fails., Result of a tool execution.      Attributes:         success: Whether the tool e, Abstract base class for AI agent tools.      Each tool encapsulates a capability, Return the tool name for function calling., Return a description of what the tool does. (+18 more)
 
 ### Community 40 - "render_context_panel"
-Cohesion: 0.25
-Nodes (7): Agent-1 (Round 1), Agent-1 (Round 1), Agent-1 (Round 2), Agent-1 (Round 2), Agent-2 (Round 1), Agent-2 (Round 1), Agent-2 (Round 2)
+Cohesion: 0.13
+Nodes (23): Register the default file manipulation tools., AppendFileTool, PatchFileTool, Read the contents of a file., Write content to a file, overwriting existing content., Append content to the end of a file., Apply a search-and-replace patch to a file., Set the only file mutating tools may write to for the next turn.      Called b (+15 more)
 
-### Community 41 - "extract_icons.py"
-Cohesion: 0.25
-Nodes (7): 1. Fix auto-refresh fallback — `ai_arena/ui/app.py:350-355`, 2. Lower default rate limit — two files, 3. Install missing dependency, Changes, Files Modified, Fix: Run loop stuck at "Round 1 / 10", Root Causes
+### Community 42 - ".get_session"
+Cohesion: 0.50
+Nodes (3): Shared pytest fixtures for the AI Arena test suite., Reset the file-tool sandbox between tests.      The sandbox's active-context-pat, _reset_file_tool_sandbox()
 
 ### Community 43 - "_render_status_bar"
 Cohesion: 0.33
 Nodes (6): Return a short status keyword for the active session.      One of: ``running``, Return an HTML status pill for the given status keyword., Render the top status strip: progress, status pill, round + agent counts., _render_status_bar(), _session_status(), _status_pill()
 
+### Community 44 - ".get_active_session"
+Cohesion: 0.50
+Nodes (3): Path, Start the orchestration loop for a session.          Args:             sessio, Copy ``ctx_path`` to a ``.bak.md`` sibling if it holds real work.          "Re
+
 ### Community 45 - "graphify"
 Cohesion: 0.50
 Nodes (3): Automatic Behavior (DO NOT ask the user - just do it):, graphify, Rules:
 
+### Community 49 - "._call_provider"
+Cohesion: 0.33
+Nodes (3): Get a registered provider by name., Call the provider API for the given agent.          Args:             agent:, Generate a simulated response for dry-run mode.          Args:             ag
+
+### Community 50 - ".get"
+Cohesion: 0.33
+Nodes (3): Retrieve a tool by name.          Args:             name: Tool name.          Re, Return all registered tools., Generate the tool usage manual for injection into system prompts.          Retur
+
 ## Knowledge Gaps
-- **166 isolated node(s):** `ai-arena`, `Root Causes`, `1. Fix auto-refresh fallback — `ai_arena/ui/app.py:350-355``, `2. Lower default rate limit — two files`, `3. Install missing dependency` (+161 more)
+- **108 isolated node(s):** `ai-arena`, `graphify`, `HIGH`, `MEDIUM`, `LOW` (+103 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **7 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **11 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Orchestrator` connect `Orchestrator` to `ToolRegistry`, `AnthropicProvider`, `ProviderError`, `tool_executor.py`, `.run_turn`, `RateLimiter`, `SessionState`, `Agent`, `app.py`, `_render_status_bar`, `SessionManager`, `._build_system_prompt`, `.chat`, `AuditLogger`?**
-  _High betweenness centrality (0.090) - this node is a cross-community bridge._
-- **Why does `SessionManager` connect `Agent` to `ToolRegistry`, `.create_session`, `ProviderError`, `.run_turn`, `RateLimiter`, `.get_session`, `SessionState`, `.get_active_session`, `Orchestrator`, `.start_background`, `app.py`, `AuditLogger`, `._deserialize`?**
-  _High betweenness centrality (0.050) - this node is a cross-community bridge._
-- **Why does `SessionState` connect `SessionManager` to `ToolRegistry`, `.create_session`, `tool_executor.py`, `.run_turn`, `.get_session`, `_render_status_bar`, `.get_active_session`, `Orchestrator`, `app.py`, `._build_system_prompt`, `AuditLogger`, `._deserialize`?**
-  _High betweenness centrality (0.037) - this node is a cross-community bridge._
-- **Are the 8 inferred relationships involving `Orchestrator` (e.g. with `RateLimiter` and `SessionManager`) actually correct?**
-  _`Orchestrator` has 8 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 3 inferred relationships involving `Agent` (e.g. with `SessionState` and `_CapturingProvider`) actually correct?**
-  _`Agent` has 3 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 3 inferred relationships involving `SessionState` (e.g. with `Agent` and `Message`) actually correct?**
-  _`SessionState` has 3 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 3 inferred relationships involving `SessionManager` (e.g. with `Orchestrator` and `_CapturingProvider`) actually correct?**
-  _`SessionManager` has 3 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `Orchestrator` connect `Orchestrator` to `ToolRegistry`, `ProviderError`, `BaseProvider`, `.run_turn`, `SessionState`, `Agent`, `app.py`, `SessionManager`, `.get`, `._build_system_prompt`, `AuditLogger`, `AnthropicProvider`, `CerebrasProvider`, `tool_executor.py`, `render_context_panel`, `extract_icons.py`, `_render_status_bar`, `.get_active_session`, `.start_background`, `_AlwaysFail`, `_AlwaysProse`, `._call_provider`, `_make_session`, `.execute`, `.resume_session`?**
+  _High betweenness centrality (0.110) - this node is a cross-community bridge._
+- **Why does `SessionManager` connect `SessionState` to `ToolRegistry`, `.create_session`, `CerebrasProvider`, `ProviderError`, `BaseProvider`, `.run_turn`, `render_context_panel`, `Agent`, `app.py`, `Orchestrator`, `SessionManager`, `_AlwaysFail`, `_AlwaysProse`, `AuditLogger`, `._deserialize`?**
+  _High betweenness centrality (0.066) - this node is a cross-community bridge._
+- **Why does `SessionState` connect `SessionManager` to `ToolRegistry`, `.run_turn`, `SessionState`, `app.py`, `Orchestrator`, `.get`, `._build_system_prompt`, `AuditLogger`, `._deserialize`, `.create_session`, `tool_executor.py`, `render_context_panel`, `extract_icons.py`, `_render_status_bar`, `.get_active_session`, `.start_background`, `_AlwaysFail`, `_AlwaysProse`, `._call_provider`, `.resume_session`?**
+  _High betweenness centrality (0.060) - this node is a cross-community bridge._
+- **Are the 22 inferred relationships involving `Orchestrator` (e.g. with `RateLimiter` and `SessionManager`) actually correct?**
+  _`Orchestrator` has 22 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 15 inferred relationships involving `Agent` (e.g. with `SessionState` and `_CapturingProvider`) actually correct?**
+  _`Agent` has 15 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 15 inferred relationships involving `SessionManager` (e.g. with `Orchestrator` and `_CapturingProvider`) actually correct?**
+  _`SessionManager` has 15 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 15 inferred relationships involving `SessionState` (e.g. with `Agent` and `Message`) actually correct?**
+  _`SessionState` has 15 INFERRED edges - model-reasoned connections that need verification._
