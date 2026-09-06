@@ -7,6 +7,7 @@ Run:  .venv\Scripts\python.exe tests\test_dryrun_5rounds.py
 """
 
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -50,14 +51,15 @@ def main() -> int:
     print("=" * 70)
     print()
 
-    # Clean up any prior context/session files from previous dry runs.
-    contexts_dir = Path("contexts")
-    for f in contexts_dir.glob("session_*.json"):
-        f.unlink()
-    for f in contexts_dir.glob("*.md"):
-        f.unlink()
+    # All runtime artifacts go into a throwaway temp dir — this script must
+    # never touch the real contexts/ directory (it used to delete every
+    # session and context file in there).
+    with tempfile.TemporaryDirectory(prefix="ai_arena_dryrun_") as tmp:
+        return _run(Path(tmp))
 
-    sm = SessionManager()
+
+def _run(tmp: Path) -> int:
+    sm = SessionManager(storage_dir=tmp / "contexts")
     agents = build_agents()
     session = sm.create_session(
         "DryRun-5Rounds",
@@ -65,6 +67,7 @@ def main() -> int:
         max_rounds=5,
         rate_limit=0,
         is_dry_run=True,
+        context_file=str(tmp / "ctx.md"),
     )
     print(f"Session created: id={session.id}")
     print(f"  Agents:        {[a.name for a in agents]}")

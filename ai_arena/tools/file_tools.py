@@ -7,16 +7,17 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from ..config import config
 from .base import BaseTool, ToolError, ToolResult
 
 
-# Project root, computed once. Used as the resolution root for any
-# *relative* path an agent hands to a file tool. Without this, ``read_file
+# The project root — single source of truth in ``config.project_root`` —
+# is the resolution root for any *relative* path an agent hands to a file
+# tool, and the outer boundary for reads. Without a fixed root, ``read_file
 # shared_context.txt`` only works when the process's CWD happens to be the
 # project root — under Streamlit that was the actual root cause of the
 # initial ``No such file or directory`` errors and the subsequent silent
 # retry storm.
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 # ---------------------------------------------------------------------------
@@ -30,28 +31,30 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 #
 # The orchestrator sets the active context path before each turn; mutating
 # tools (write/append/patch) refuse to touch anything that doesn't resolve
-# to that path. Reads stay unrestricted inside the project root so agents
-# can still inspect documentation or their own earlier output.
-_lock = threading.Lock()
-_active_context_path: Path | None = None
+# to that path. Reads stay allowed inside the project root so agents can
+# still inspect documentation or their own earlier output — except for
+# sensitive paths (credentials, session data, audit logs), which are denied
+# even inside the root.
+#
+# The binding is thread-local, not process-wide: concurrent sessions (e.g.
+# two Streamlit browser tabs, which run in separate threads of one process)
+# each keep their own write target instead of the last setter winning.
+_sandbox_state = threading.local()
 
 
 def set_active_context_path(path: str | Path | None) -> None:
-    """Set the only file mutating tools may write to for the next turn.
+    """Bind the only file mutating tools may write to on the current thread.
 
     Called by the orchestrator at the start of every turn with the
     session's context file. Pass ``None`` to disable the sandbox (used by
     tests that exercise tools directly without a session).
     """
-    global _active_context_path
-    with _lock:
-        _active_context_path = Path(path).resolve() if path else None
+    _sandbox_state.active = Path(path).resolve() if path else None
 
 
 def get_active_context_path() -> Path | None:
-    """Return the currently sandboxed write target, if any."""
-    with _lock:
-        return _active_context_path
+    """Return the write target bound to the current thread, if any."""
+    return getattr(_sandbox_state, "active", None)
 
 
 def _resolve_path(raw_path: str) -> Path:
@@ -65,7 +68,7 @@ def _resolve_path(raw_path: str) -> Path:
     p = Path(raw_path)
     if p.is_absolute():
         return p
-    return _PROJECT_ROOT / p
+    return config.project_root / p
 
 
 def _enforce_write_scope(raw_path: str) -> Path | None:
@@ -99,12 +102,20 @@ def _enforce_write_scope(raw_path: str) -> Path | None:
 
 
 def _enforce_read_scope(raw_path: str) -> Path:
-    """Resolve ``raw_path`` and verify a read stays inside the project root.
+    """Resolve ``raw_path`` and verify a read stays inside the project root
+    and away from sensitive files.
 
     Reads are intentionally more permissive than writes (agents may inspect
     docs, sys_prompts, etc.), but they still must not escape the project
     tree — that would let a prompted agent exfiltrate ``~/.ssh/id_rsa``
     or ``/etc/passwd`` contents into the context file.
+
+    Being inside the root is NOT enough: ``.env``, the session JSON files
+    (which carry every agent's API key), audit logs and other credentials
+    live inside the root too. Those are denied via
+    ``config.is_sensitive_read_path`` — otherwise an agent could read a
+    secret and write it into the shared context, from where Export leaks
+    it.
 
     The check only applies when a session is bound (i.e. the sandbox is
     active). Direct ``ToolExecutor`` usage in tests, without an
@@ -118,12 +129,17 @@ def _enforce_read_scope(raw_path: str) -> Path:
     if get_active_context_path() is None:
         return resolved
     try:
-        resolved.relative_to(_PROJECT_ROOT)
+        resolved.relative_to(config.project_root)
     except ValueError as exc:
         raise ToolError(
             f"read rejected: '{raw_path}' is outside the project root "
-            f"({_PROJECT_ROOT})."
+            f"({config.project_root})."
         ) from exc
+    if config.is_sensitive_read_path(resolved):
+        raise ToolError(
+            f"read rejected: '{raw_path}' is a sensitive path (credentials, "
+            f"session data or audit logs) and cannot be read by agents."
+        )
     return resolved
 
 
@@ -327,6 +343,11 @@ class SummarizeContextTool(BaseTool):
 def compute_diff(old_content: str, new_content: str) -> str:
     """Compute a unified diff between two strings.
 
+    Lines are split without their line endings and ``lineterm=""`` lets
+    ``unified_diff`` emit bare header lines — mixing ``keepends=True``
+    with ``lineterm=""`` produces stray empty lines after every content
+    line, which showed up as noise in the UI's Diff tab.
+
     Args:
         old_content: Original content.
         new_content: New content.
@@ -334,7 +355,7 @@ def compute_diff(old_content: str, new_content: str) -> str:
     Returns:
         Unified diff string.
     """
-    old_lines = old_content.splitlines(keepends=True)
-    new_lines = new_content.splitlines(keepends=True)
+    old_lines = old_content.splitlines()
+    new_lines = new_content.splitlines()
     diff = difflib.unified_diff(old_lines, new_lines, lineterm="")
     return "\n".join(diff)

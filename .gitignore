@@ -37,6 +37,7 @@ horse-ai-explainer/model/
 # Generated data dumps
 *.json
 !.devcontainer/devcontainer.json
+!pyrightconfig.json
 
 # Misc
 screen_shot/

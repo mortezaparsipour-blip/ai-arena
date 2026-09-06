@@ -5,8 +5,9 @@ Covers:
    block in the user message — agent does NOT need to call read_file.
 2. _process_tool_calls executes AT MOST ONE tool call and returns,
    without re-calling the provider.
-3. After a successful write_file, run_turn does NOT call
-   _append_agent_turn_to_context (no double-append).
+3. After a tool-call turn, run_turn returns the envelope message and
+   step() ADVANCES to the next agent (P0 regression — the loop used to
+   stay on the same agent forever).
 4. start_session still seeds the file with header + initial task +
    working-draft section.
 5. {ctx_path} substitution works, {round} is no longer substituted.
@@ -147,7 +148,7 @@ def test_3_process_tool_calls_one_shot(tmp_path):
         '{"tool": "write_file", "arguments": {"path": "x", "content": "y"}}\n'
         '```'
     )
-    final, last_result = orch._process_tool_calls(
+    final, last_result, turn_message = orch._process_tool_calls(
         agent, session, fake_exec, response
     )
     assert fake_exec.process_response_calls == 1, (
@@ -159,6 +160,10 @@ def test_3_process_tool_calls_one_shot(tmp_path):
     )
     assert last_result is not None
     assert last_result.success is True
+    assert turn_message is not None, (
+        "tool-call turns must surface the envelope message so step() advances"
+    )
+    assert turn_message.had_tool_call is True
     # The envelope was recorded as a system message in session.messages.
     assert any("wrote 100 chars" in m.content for m in session.messages)
     print("PASS\n")
@@ -186,15 +191,8 @@ def test_4_run_turn_no_double_append(tmp_path):
         def __init__(self):
             self.call_count = 0
 
-        def __call__(self, agent, session, tool_result_envelope=None):
+        def __call__(self, agent, session):
             self.call_count += 1
-            if tool_result_envelope is not None:
-                # If the orchestrator re-calls us with the envelope, we
-                # would loop. With the one-shot flow this must NOT happen.
-                raise AssertionError(
-                    "Provider was re-called with a tool envelope — "
-                    "the inner loop is back!"
-                )
             return (
                 '```tool_call\n'
                 '{"tool": "write_file", "arguments": {"path": "'
@@ -239,9 +237,12 @@ def test_4_run_turn_no_double_append(tmp_path):
     session.is_running = True
     orch._stop_event = threading.Event()
     msg = orch.run_turn(session)
-    # run_turn returns None for tool-call turns since the envelope
-    # message is recorded inside _process_tool_calls.
-    assert msg is None
+    # run_turn returns the envelope message for tool-call turns (recorded
+    # inside _process_tool_calls) so step() can advance to the next agent.
+    assert msg is not None, (
+        "tool-call turns must return the envelope message (advance signal)"
+    )
+    assert msg.had_tool_call is True
 
     # The fake provider was called EXACTLY ONCE.
     assert orch._call_provider.call_count == 1, (
@@ -296,6 +297,66 @@ def test_6_initial_prompt_round_trips(tmp_path):
     print("PASS\n")
 
 
+def test_7_step_advances_after_tool_call(tmp_path):
+    """P0 regression: after a tool-call turn, step() must ADVANCE to the
+    next agent. The loop used to stay positioned on the same agent forever
+    (run_turn returned None for tool turns and step() only advanced on a
+    truthy message), re-billing an API call on every iteration and never
+    reaching is_complete()."""
+    from ai_arena.engine.tool_registry import ToolRegistry
+
+    a = Agent(
+        id="a0", name="A", role=AgentRole.CRITIC,
+        system_prompt="x", provider="cerebras", model="m", api_key="k",
+    )
+    b = Agent(
+        id="a1", name="B", role=AgentRole.OPTIMIST,
+        system_prompt="x", provider="cerebras", model="m", api_key="k",
+    )
+    session = _make_session(tmp_path, [a, b], "x")
+    (tmp_path / "ctx.md").write_text("seed\n", encoding="utf-8")
+    orch = _make_orch()
+    orch.tool_registry = ToolRegistry()
+
+    class FakeProvider:
+        def __init__(self):
+            self.call_count = 0
+
+        def __call__(self, agent, session):
+            self.call_count += 1
+            if agent.id == "a0":
+                return (
+                    '```tool_call\n'
+                    '{"tool": "write_file", "arguments": {"path": "'
+                    + session.context_file_path.replace("\\", "\\\\")
+                    + '", "content": "updated by A"}}\n'
+                    '```'
+                )
+            return "prose from B"
+
+    orch.rate_limiter = type("L", (), {"delay_seconds": 0, "wait": lambda self: None})()
+    orch._stop_event = threading.Event()
+    orch._call_provider = FakeProvider()
+    session.is_running = True
+
+    msg1 = orch.step(session)
+    assert msg1 is not None, "tool-call turn must not be treated as a stop"
+    assert msg1.had_tool_call is True
+    assert session.current_agent_index == 1, (
+        "P0 regression: loop must advance to the next agent after a "
+        "tool-call turn"
+    )
+
+    msg2 = orch.step(session)
+    assert msg2 is not None
+    assert not msg2.is_system, "second turn is B's prose message"
+    # Wrap-around: back to agent A, round incremented.
+    assert session.current_agent_index == 0
+    assert session.current_round == 1
+    assert not session.is_complete()
+    print("PASS\n")
+
+
 def run_all():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = pathlib.Path(tmp)
@@ -306,6 +367,7 @@ def run_all():
             test_4_run_turn_no_double_append,
             test_5_ctx_path_substituted_round_dropped,
             test_6_initial_prompt_round_trips,
+            test_7_step_advances_after_tool_call,
         ):
             print(f"=== {fn.__name__} ===")
             fn(tmp_path)

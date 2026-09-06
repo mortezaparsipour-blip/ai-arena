@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+from ..config import config
 from .agent import Agent
 from .message import Message
 
@@ -37,21 +38,21 @@ class SessionState:
     agents: list[Agent] = field(default_factory=list)
     messages: list[Message] = field(default_factory=list)
     context_file_path: str = "shared_context.md"
-    # The user-provided task brief. Stored on the session (not in the
-    # context file) so it can be sent to the model as the first user
-    # message on round 0 without polluting the agents' shared scratchpad.
+    # The user-provided task brief. Persisted on the session for reference
+    # and export; it is never sent to the model as a message —
+    # ``start_session`` seeds it INTO the context file, which is the only
+    # channel through which agents see it.
     initial_prompt: str = ""
     current_round: int = 0
     current_agent_index: int = 0
     max_rounds: int = 10
-    rate_limit_seconds: int = 5
+    rate_limit_seconds: int = field(default_factory=lambda: config.default_rate_limit)
     is_running: bool = False
     is_paused: bool = False
     is_dry_run: bool = False
     summary_agent: Optional[Agent] = None
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
-    tool_max_retries: int = 3
     # Consecutive provider-failure counter. Incremented on every
     # ProviderError, reset to 0 on any successful turn. When it reaches
     # ``max_consecutive_errors`` the orchestrator stops the session so a

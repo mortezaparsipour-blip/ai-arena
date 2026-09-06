@@ -1,7 +1,10 @@
-"""Tool executor with retry logic and audit logging for AI Arena.
+"""Tool executor with audit logging for AI Arena.
 
-Executes tool calls, handles retries on failure, logs all attempts,
-and wraps results in envelopes for AI consumption.
+Executes tool calls — exactly one attempt each. In the one-shot flow the
+model never sees the tool result, so re-running identical arguments on a
+deterministic failure (rejected path, malformed arguments) is pure waste.
+Every attempt is logged, and results are wrapped in envelopes for the
+session message log.
 """
 
 from __future__ import annotations
@@ -9,25 +12,36 @@ from __future__ import annotations
 import json
 import logging
 import sys
-import time
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from ..config import config
 from ..engine.tool_registry import ToolRegistry, tool_registry
-from ..tools.base import ToolError, ToolResult
-from .tool_parser import ToolCall, ToolCallParseError, has_tool_call, parse_tool_call
+from ..tools.base import ToolResult
+from .tool_parser import ToolCall, ToolCallParseError, parse_tool_call
 
 
 # Module-level logger so audit-log IO failures are visible in the console
 # (and therefore in Streamlit logs) instead of being silently swallowed.
 _log = logging.getLogger("ai_arena.audit")
 
+# Long values are clipped in the audit log. ``write_file`` arguments carry
+# the entire context file, so logging them raw would make the log grow
+# unbounded and duplicate anything an agent exfiltrated into a write call.
+# The log is for auditing tool activity, not for mirroring file contents.
+MAX_AUDIT_ARG_CHARS = 300
 
-class ToolExecutorError(Exception):
-    """Raised when a tool cannot be executed after max retries."""
-    pass
+
+def _truncate(value: Any) -> Any:
+    """Return ``value`` clipped to ``MAX_AUDIT_ARG_CHARS`` when it is a long string."""
+    if isinstance(value, str) and len(value) > MAX_AUDIT_ARG_CHARS:
+        return value[:MAX_AUDIT_ARG_CHARS] + f"...[truncated, {len(value)} chars total]"
+    return value
+
+
+def _truncate_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Return tool-call arguments with every long string value clipped."""
+    return {key: _truncate(value) for key, value in arguments.items()}
 
 
 TOOL_RESULT_ENVELOPE_TEMPLATE = """```tool_result
@@ -36,7 +50,7 @@ TOOL_RESULT_ENVELOPE_TEMPLATE = """```tool_result
 
 
 def build_tool_result_envelope(result: ToolResult) -> str:
-    """Wrap a tool result in a labeled envelope for AI consumption.
+    """Wrap a tool result in a labeled envelope for the message log.
 
     Args:
         result: Tool execution result.
@@ -52,19 +66,16 @@ def build_tool_result_envelope(result: ToolResult) -> str:
     return TOOL_RESULT_ENVELOPE_TEMPLATE.format(result_json=json.dumps(envelope, indent=2))
 
 
-def build_tool_error_envelope(
-    tool_call: ToolCall,
-    error_message: str,
-    attempt: int,
-    max_attempts: int,
-) -> str:
+def build_tool_error_envelope(tool_call: ToolCall, error_message: str) -> str:
     """Build an error envelope for a failed tool call.
+
+    In the one-shot flow the failing agent never sees this envelope — it is
+    recorded in the message log for the user. The wording must not promise
+    a retry that never happens.
 
     Args:
         tool_call: The tool call that failed.
         error_message: Error description.
-        attempt: Current attempt number.
-        max_attempts: Maximum allowed attempts.
 
     Returns:
         Formatted error envelope string.
@@ -72,13 +83,12 @@ def build_tool_error_envelope(
     envelope = {
         "success": False,
         "tool": tool_call.tool_name,
-        "arguments": tool_call.arguments,
+        "arguments": _truncate_arguments(tool_call.arguments),
         "error": error_message,
-        "retry": {
-            "attempt": attempt,
-            "max_attempts": max_attempts,
-            "message": f"Attempt {attempt}/{max_attempts} failed. Please correct the tool call and retry.",
-        },
+        "note": (
+            "The tool call failed and was NOT retried. The error was recorded "
+            "for the user; the session continues with the current file state."
+        ),
     }
     return TOOL_RESULT_ENVELOPE_TEMPLATE.format(result_json=json.dumps(envelope, indent=2))
 
@@ -115,20 +125,20 @@ class AuditLogger:
             print(f"[audit-log] {exc}", file=sys.stderr)
 
     def log_tool_call(self, tool_call: ToolCall, attempt: int) -> None:
-        """Log a tool call attempt."""
+        """Log a tool call attempt (long argument values clipped)."""
         self.log("tool_call", {
             "tool": tool_call.tool_name,
-            "arguments": tool_call.arguments,
+            "arguments": _truncate_arguments(tool_call.arguments),
             "attempt": attempt,
         })
 
     def log_tool_result(self, tool_call: ToolCall, result: ToolResult, attempt: int) -> None:
-        """Log a tool execution result."""
+        """Log a tool execution result (long output/error clipped)."""
         self.log("tool_result", {
             "tool": tool_call.tool_name,
             "success": result.success,
-            "output_preview": result.output[:200] if result.output else "",
-            "error": result.error,
+            "output_preview": _truncate(result.output) if result.output else "",
+            "error": _truncate(result.error),
             "attempt": attempt,
         })
 
@@ -138,31 +148,27 @@ class AuditLogger:
 
 
 class ToolExecutor:
-    """Executes tool calls with retry logic and audit logging.
+    """Executes tool calls — one attempt each — with audit logging.
 
     The executor:
     1. Receives an AI response
     2. Detects and parses any tool calls
-    3. Executes the tool via the registry
-    4. Retries on failure up to max_attempts
-    5. Returns a result envelope or error envelope
+    3. Executes the tool exactly once via the registry
+    4. Returns a result envelope or error envelope for the message log
     """
 
     def __init__(
         self,
         registry: ToolRegistry | None = None,
-        max_retries: int = 3,
         session_id: str = "default",
     ) -> None:
         """Initialize tool executor.
 
         Args:
             registry: Tool registry instance. Uses global if not provided.
-            max_retries: Maximum retry attempts for failed tool calls.
             session_id: Session ID for audit logging.
         """
         self.registry = registry or tool_registry
-        self.max_retries = max_retries
         self.audit_logger = AuditLogger(session_id)
 
     def process_response(
@@ -177,13 +183,13 @@ class ToolExecutor:
             Tuple of (processed_response_text, had_tool_call, last_result).
             - If no tool call: returns (original_text, False, None)
             - If tool call succeeds: returns (success_envelope, True, result)
-            - If tool call fails after retries: returns (error_envelope, True, result)
+            - If tool call fails: returns (error_envelope, True, result)
 
-            The envelope is the *envelope string* the orchestrator should
-            either surface to the user (on failure → retry path) or feed back
-            to the agent as a user message (on success → re-prompt path).
-            Returning the ``ToolResult`` lets the orchestrator branch on
-            ``result.success`` without re-parsing the envelope.
+            The envelope is the *envelope string* recorded in the session
+            message log for the user — in the one-shot flow it is never fed
+            back to the agent that produced it. Returning the ``ToolResult``
+            lets the orchestrator branch on ``result.success`` without
+            re-parsing the envelope.
         """
         try:
             tool_call = parse_tool_call(response_text)
@@ -196,56 +202,41 @@ class ToolExecutor:
 
         self.audit_logger.log_tool_call(tool_call, attempt=1)
 
-        # Execute with retries
-        result, success_attempt = self._execute_with_retry(tool_call)
+        result = self._execute_tool_call(tool_call)
+        self.audit_logger.log_tool_result(tool_call, result, attempt=1)
 
         if result.success:
-            self.audit_logger.log_tool_result(tool_call, result, attempt=success_attempt)
             return build_tool_result_envelope(result), True, result
-        else:
-            error_envelope = build_tool_error_envelope(
-                tool_call, result.error, attempt=self.max_retries, max_attempts=self.max_retries
-            )
-            self.audit_logger.log_error("max_retries_exceeded", {
-                "tool": tool_call.tool_name,
-                "error": result.error,
-            })
-            return error_envelope, True, result
 
-    def _execute_with_retry(self, tool_call: ToolCall) -> tuple[ToolResult, int]:
-        """Execute a tool call with retry logic.
+        error_envelope = build_tool_error_envelope(tool_call, result.error)
+        self.audit_logger.log_error("tool_execution_failed", {
+            "tool": tool_call.tool_name,
+            "error": result.error,
+        })
+        return error_envelope, True, result
+
+    def _execute_tool_call(self, tool_call: ToolCall) -> ToolResult:
+        """Execute a tool call exactly once, without retrying.
+
+        Tool operations are local file operations; their failures (bad
+        path, rejected scope, malformed arguments) are deterministic, and
+        the one-shot flow never returns a result to the model — retrying
+        identical arguments would only burn I/O.
 
         Args:
             tool_call: Parsed tool call.
 
         Returns:
-            Tuple of (final_tool_result, attempt_on_success).
-            attempt_on_success is the attempt number on which the tool
-            succeeded, or max_retries if it never did.
+            The tool result, success or failure.
         """
-        last_error = ""
-        for attempt in range(1, self.max_retries + 1):
-            tool = self.registry.get(tool_call.tool_name)
-            if tool is None:
-                return ToolResult(
-                    success=False,
-                    output="",
-                    error=f"Unknown tool: {tool_call.tool_name}. Available tools: {', '.join(t.name for t in self.registry.list_tools())}",
-                ), attempt
-
-            result = tool.execute(**tool_call.arguments)
-
-            if result.success:
-                return result, attempt
-
-            last_error = result.error
-            self.audit_logger.log_tool_result(tool_call, result, attempt=attempt)
-
-        return ToolResult(
-            success=False,
-            output="",
-            error=f"Tool '{tool_call.tool_name}' failed after {self.max_retries} attempts. Last error: {last_error}",
-        ), self.max_retries
+        tool = self.registry.get(tool_call.tool_name)
+        if tool is None:
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"Unknown tool: {tool_call.tool_name}. Available tools: {', '.join(t.name for t in self.registry.list_tools())}",
+            )
+        return tool.execute(**tool_call.arguments)
 
     def execute_tool(self, tool_name: str, **kwargs: Any) -> ToolResult:
         """Execute a tool directly by name.

@@ -18,9 +18,8 @@ A fully configurable, production-grade multi-AI orchestration platform where AI 
 ## Tech Stack
 
 - **Python** >= 3.10
-- **Streamlit** — UI
+- **Streamlit** — UI (+ `streamlit-autorefresh` for live refresh)
 - **OpenAI / Anthropic / OpenRouter / Cerebras** — LLM providers
-- **Pydantic** — data validation
 
 ## Quick Start
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,15 @@ from ..models.agent import Agent
 from ..models.message import Message
 from ..models.session_state import SessionState
 from ..config import config
+
+logger = logging.getLogger(__name__)
+
+# Atomic-write tuning for ``_save_session``. Windows can transiently raise
+# PermissionError on ``os.replace`` while the destination is briefly held
+# open (editor preview, antivirus scan), so the replace is retried with a
+# small backoff before giving up.
+_SAVE_REPLACE_ATTEMPTS = 5
+_SAVE_REPLACE_BACKOFF_SECONDS = 0.05
 
 
 class SessionManager:
@@ -64,9 +75,12 @@ class SessionManager:
             try:
                 with path.open("r", encoding="utf-8") as f:
                     data = json.load(f)
-            except (OSError, json.JSONDecodeError):
-                # Skip corrupted/partial files silently — they will be
-                # overwritten on the next save.
+            except (OSError, json.JSONDecodeError) as exc:
+                # Corrupted/partial files are skipped — they will be
+                # overwritten on the next save. Surface the skip so a
+                # silently lost session is at least visible in the log
+                # instead of disappearing without a trace.
+                logger.warning("Skipping unreadable session file %s: %s", path.name, exc)
                 continue
             session = self._deserialize(data)
             if session is None:
@@ -112,11 +126,10 @@ class SessionManager:
                 current_round=int(data.get("current_round", 0)),
                 current_agent_index=int(data.get("current_agent_index", 0)),
                 max_rounds=int(data.get("max_rounds", 10)),
-                rate_limit_seconds=int(data.get("rate_limit_seconds", 60)),
+                rate_limit_seconds=int(data.get("rate_limit_seconds", config.default_rate_limit)),
                 is_running=bool(data.get("is_running", False)),
                 is_paused=bool(data.get("is_paused", False)),
                 is_dry_run=bool(data.get("is_dry_run", False)),
-                tool_max_retries=int(data.get("tool_max_retries", 3)),
                 consecutive_errors=int(data.get("consecutive_errors", 0)),
                 max_consecutive_errors=int(data.get("max_consecutive_errors", 3)),
                 initial_prompt=data.get("initial_prompt", ""),
@@ -168,10 +181,9 @@ class SessionManager:
         name: str,
         agents: list[Agent],
         max_rounds: int = 10,
-        rate_limit: int = 60,
+        rate_limit: int | None = None,
         context_file: str | None = None,
         is_dry_run: bool = False,
-        tool_max_retries: int = 3,
     ) -> SessionState:
         """Create a new session.
 
@@ -181,20 +193,20 @@ class SessionManager:
             max_rounds: Maximum ping-pong rounds. Clamped to ``>= 1``;
                 a non-positive value would make ``is_complete()`` True
                 before the first turn, ending the session instantly.
-            rate_limit: Rate limit delay in seconds.
+            rate_limit: Rate limit delay in seconds. Defaults to
+                ``config.default_rate_limit`` when None.
             context_file: Optional custom context file path.
             is_dry_run: Whether this is a dry-run session.
-            tool_max_retries: Max retries for failed tool calls.
 
         Returns:
             The newly created session state.
         """
         if max_rounds < 1:
             max_rounds = 1
+        if rate_limit is None:
+            rate_limit = config.default_rate_limit
         if rate_limit < 0:
             rate_limit = 0
-        if tool_max_retries < 0:
-            tool_max_retries = 0
 
         session_id = str(uuid.uuid4())[:8]
         ctx_path = context_file or str(config.get_context_path(session_id))
@@ -207,7 +219,6 @@ class SessionManager:
             rate_limit_seconds=rate_limit,
             context_file_path=ctx_path,
             is_dry_run=is_dry_run,
-            tool_max_retries=tool_max_retries,
         )
 
         # Initialize context file
@@ -257,7 +268,12 @@ class SessionManager:
         return result
 
     def delete_session(self, session_id: str) -> bool:
-        """Delete a session and its context file.
+        """Delete a session and every file it owns.
+
+        Removes the session JSON, the context file, its ``.bak.md``
+        backup (created by ``_backup_context_if_needed``) and the
+        session's audit log — otherwise deleted sessions leave orphan
+        files accumulating in ``contexts/`` forever.
 
         Returns:
             True if deleted, False if not found.
@@ -268,9 +284,15 @@ class SessionManager:
         ctx_path = Path(session.context_file_path)
         if ctx_path.exists():
             ctx_path.unlink()
+        backup_path = ctx_path.with_suffix(".bak.md")
+        if backup_path.exists():
+            backup_path.unlink()
         storage_file = self.storage_dir / f"session_{session_id}.json"
         if storage_file.exists():
             storage_file.unlink()
+        audit_file = self.storage_dir / f"audit_{session_id}.log"
+        if audit_file.exists():
+            audit_file.unlink()
         if self._active_session_id == session_id:
             self._active_session_id = None
         self._save_locks.pop(session_id, None)
@@ -279,10 +301,12 @@ class SessionManager:
     def _save_session(self, session: SessionState) -> None:
         """Persist session state to disk atomically.
 
-        Writes to ``session_<id>.json.tmp`` first, then renames it to the
-        final path. The rename is atomic on both POSIX and Windows, so a
-        reader (or a concurrent writer crashing mid-write) will never observe
-        a half-written JSON document.
+        Writes to ``session_<id>.json.tmp`` first, then ``os.replace``s it
+        onto the final path. The rename is atomic on both POSIX and
+        Windows, so a reader (or a concurrent writer crashing mid-write)
+        never observes a half-written JSON document — a crash mid-write
+        leaves the previous valid file untouched instead of a truncated
+        one that would be silently skipped on the next load.
         """
         data = {
             "id": session.id,
@@ -297,7 +321,6 @@ class SessionManager:
             "is_running": session.is_running,
             "is_paused": session.is_paused,
             "is_dry_run": session.is_dry_run,
-            "tool_max_retries": session.tool_max_retries,
             "consecutive_errors": session.consecutive_errors,
             "max_consecutive_errors": session.max_consecutive_errors,
             "initial_prompt": session.initial_prompt,
@@ -305,10 +328,23 @@ class SessionManager:
             "updated_at": session.updated_at.isoformat(),
         }
         storage_file = self.storage_dir / f"session_{session.id}.json"
+        tmp_file = storage_file.with_suffix(".json.tmp")
         lock = self._save_lock(session.id)
         payload = json.dumps(data, indent=2)
         with lock:
-            # Write directly to the target to avoid Windows
-            # PermissionError with atomic os.replace(tmp → real).
-            with storage_file.open("w", encoding="utf-8") as f:
+            with tmp_file.open("w", encoding="utf-8") as f:
                 f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+            last_error: OSError | None = None
+            for _ in range(_SAVE_REPLACE_ATTEMPTS):
+                try:
+                    os.replace(tmp_file, storage_file)
+                    return
+                except PermissionError as exc:
+                    # Windows: destination briefly held open by an external
+                    # reader. Back off and retry before giving up.
+                    last_error = exc
+                    time.sleep(_SAVE_REPLACE_BACKOFF_SECONDS)
+            assert last_error is not None  # only reachable when a replace failed
+            raise last_error

@@ -115,6 +115,17 @@ AGENT_PALETTE: list[str] = [
 ]
 
 
+# Message variant accent colors (error / warning / tool-call / system).
+# Single source of truth for chat_panel's bubble accents — inline hex
+# literals in the panels drift away from the palette when re-themed.
+MSG_VARIANT_COLORS: dict[str, str] = {
+    "error":     "#ef4444",  # matches --status-error
+    "warning":   "#f59e0b",  # matches --status-warning
+    "tool-call": "#f59e0b",
+    "system":    "#475569",  # matches --border-strong
+}
+
+
 def css_variables_block() -> str:
     """Return a ``<style>`` snippet declaring the tokens as CSS variables.
 

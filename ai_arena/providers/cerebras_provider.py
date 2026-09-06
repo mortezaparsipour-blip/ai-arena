@@ -17,7 +17,6 @@ from .base import BaseProvider, ProviderError
 
 if TYPE_CHECKING:
     from cerebras.cloud.sdk import Cerebras
-    from cerebras.cloud.sdk.types.chat import ChatCompletion
 
 try:
     from cerebras.cloud.sdk import Cerebras

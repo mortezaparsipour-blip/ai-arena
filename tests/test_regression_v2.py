@@ -13,6 +13,9 @@ P2-1  Dead code removed (_append_agent_turn_to_context, _update_context,
 P2-2  create_session clamps max_rounds to >= 1.
 P2-3  Live indicator in chat_panel is scoped to the *last* message of
        the active agent, not all messages.
+SEC-1 Sensitive paths (.env, session JSONs, audit logs) are denied to
+       read_file even inside the project root.
+SEC-6 The file-tool sandbox binding is thread-local, not process-wide.
 """
 
 from __future__ import annotations
@@ -118,7 +121,6 @@ def _make_orch() -> Orchestrator:
     orch._is_running = False
     orch._last_error = None
     orch._loop_thread = None
-    orch.max_tool_retries = 3
     orch.rate_limiter = type("L", (), {"delay_seconds": 0, "wait": lambda self: None})()
 
     class _NoSave:
@@ -596,6 +598,95 @@ class TestP2_3_LiveIndicator:
 
 
 # ---------------------------------------------------------------------------
+# SEC-1: sensitive paths are denied to read_file even inside the root
+# ---------------------------------------------------------------------------
+
+class TestSEC1_SensitiveReadDeny:
+    """SEC-1: ``.env`` and ``contexts/session_*.json`` live INSIDE the
+    project root, so the root check alone never protected them. The
+    project root is monkeypatched to tmp_path so the tests exercise the
+    deny list without touching the real repository."""
+
+    def _bind(self, tmp_path: Path) -> Path:
+        ctx = tmp_path / "ctx.md"
+        ctx.write_text("", encoding="utf-8")
+        set_active_context_path(str(ctx))
+        return ctx
+
+    def test_env_file_denied(self, tmp_path: Path, monkeypatch):
+        from ai_arena.config import config as app_config
+
+        monkeypatch.setattr(app_config, "project_root", tmp_path)
+        secret = tmp_path / ".env"
+        secret.write_text("OPENAI_API_KEY=sk-real", encoding="utf-8")
+        self._bind(tmp_path)
+        try:
+            res = ReadFileTool().execute(path=str(secret))
+            assert not res.success
+            assert "sensitive" in res.error
+        finally:
+            set_active_context_path(None)
+
+    def test_session_json_denied(self, tmp_path: Path, monkeypatch):
+        from ai_arena.config import config as app_config
+
+        monkeypatch.setattr(app_config, "project_root", tmp_path)
+        contexts = tmp_path / "contexts"
+        contexts.mkdir()
+        session_file = contexts / "session_abc123.json"
+        session_file.write_text('{"agents": [{"api_key": "sk-real"}]}', encoding="utf-8")
+        self._bind(tmp_path)
+        try:
+            res = ReadFileTool().execute(path=str(session_file))
+            assert not res.success
+            assert "sensitive" in res.error
+        finally:
+            set_active_context_path(None)
+
+    def test_regular_file_inside_root_allowed(self, tmp_path: Path, monkeypatch):
+        from ai_arena.config import config as app_config
+
+        monkeypatch.setattr(app_config, "project_root", tmp_path)
+        notes = tmp_path / "docs" / "notes.md"
+        notes.parent.mkdir()
+        notes.write_text("hello", encoding="utf-8")
+        self._bind(tmp_path)
+        try:
+            res = ReadFileTool().execute(path=str(notes))
+            assert res.success
+            assert res.output == "hello"
+        finally:
+            set_active_context_path(None)
+
+
+# ---------------------------------------------------------------------------
+# SEC-6: sandbox binding is thread-local
+# ---------------------------------------------------------------------------
+
+class TestSEC6_ThreadLocalSandbox:
+    def test_binding_is_thread_local(self, tmp_path: Path):
+        ctx = tmp_path / "ctx.md"
+        ctx.write_text("x", encoding="utf-8")
+        seen: dict[str, Any] = {}
+
+        set_active_context_path(str(ctx))
+        try:
+            def probe():
+                seen["in_thread"] = get_active_context_path()
+
+            t = threading.Thread(target=probe)
+            t.start()
+            t.join()
+            assert seen["in_thread"] is None, (
+                "sandbox binding must be thread-local, not process-wide"
+            )
+            # The main thread keeps its own binding.
+            assert get_active_context_path() is not None
+        finally:
+            set_active_context_path(None)
+
+
+# ---------------------------------------------------------------------------
 # Session persistence: new fields round-trip through save/load
 # ---------------------------------------------------------------------------
 
@@ -607,7 +698,7 @@ class TestSessionPersistence:
             system_prompt="x", provider="p", model="m", api_key="k",
         )
         session = sm.create_session("PersistErr", [agent], max_rounds=3,
-                                     rate_limit=0, tool_max_retries=5)
+                                     rate_limit=0)
         session.consecutive_errors = 2
         session.max_consecutive_errors = 7
         sm._save_session(session)
@@ -617,4 +708,3 @@ class TestSessionPersistence:
         assert loaded is not None
         assert loaded.consecutive_errors == 2
         assert loaded.max_consecutive_errors == 7
-        assert loaded.tool_max_retries == 5

@@ -64,12 +64,10 @@ The middleware flow for each agent turn (one-shot per turn):
      (agent does NOT need to call read_file — content is pre-injected)
 3. Response is received from the LLM
 4. Parser detects tool calls in the response
-   ├─ No tool call → record agent message → advance to next agent
-   └─ Tool call detected → execute via registry (one shot, no re-call)
+   ├─ No tool call → record agent message + [WARNING] → advance to next agent
+   └─ Tool call detected → execute once via registry (one shot, no re-call)
        ├─ Success → record envelope as system message → advance
-       └─ Failure → retry up to tool_max_retries (default 3)
-           ├─ Retry success → record envelope → advance
-           └─ Max retries exceeded → error envelope, graceful degradation
+       └─ Failure → record error envelope for the user (no retry) → advance
 5. Context file is already updated (via write_file tool)
 6. Advance to next agent in the ping-pong loop
 ```
@@ -77,16 +75,18 @@ The middleware flow for each agent turn (one-shot per turn):
 > **Key design:** The orchestrator does NOT re-call the provider after a tool
 > call. Each agent turn is exactly one provider call. The file content is
 > injected into the user message so agents never need to call `read_file`.
+> Tool-call turns return the envelope message, so `step()` advances to the
+> next agent exactly like prose turns — only a failed provider call leaves
+> the loop positioned on the same agent.
 
 ## Key Design Decisions
 
 ### Why middleware pattern?
 The app acts as an intelligent middleware between agents because:
 - It can detect and execute tool calls transparently
-- It can retry failed tool calls without involving the user
 - It can inject tool manuals into system prompts automatically
 - It can log all tool interactions for debugging
-- It ensures agents never get stuck — always succeeds, retries, or degrades gracefully
+- It keeps turns one-shot: exactly one provider call per turn, with the loop advancing after both prose and tool-call turns
 
 ### Why a real file on disk?
 The shared context is a real file on disk to:

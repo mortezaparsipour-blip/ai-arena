@@ -12,7 +12,7 @@ AI Arena is configured through the Streamlit UI — no code changes are required
 - **Description:** Number of full cycles through all active agents. Each round gives each enabled agent one turn.
 
 ### Rate Limit (seconds)
-- **Default:** 60
+- **Default:** 5
 - **Range:** 0–300
 - **Description:** Minimum delay between API calls. Prevents hitting rate limits on provider APIs. Set to 0 for no delay (use with caution).
 
@@ -38,7 +38,9 @@ The LLM provider to use. Available options:
 Specific model variant for the selected provider. Choices are populated dynamically based on provider selection.
 
 ### API Key
-Your API key for the selected provider. Keys are not persisted to disk — they are stored only in the Streamlit session state during the session.
+Your API key for the selected provider. The field is pre-filled from `.env` when the variable exists; anything you type overrides it for the current run.
+
+**Where keys live:** keys entered in the UI are passed to the in-memory session and ARE persisted in the session file (`contexts/session_<id>.json`, a local git-ignored folder) so a saved session resumes with its keys. Because keys exist on disk there, agents can never read those files — the file-tool sandbox denies `.env*`, `contexts/session_*.json`, `audit_*.log`, `.streamlit/`, `.git/` and other sensitive paths even inside the project root.
 
 ### System Prompt
 Pre-configured prompt loaded from `/sys_prompts/` or a custom prompt entered directly.
@@ -76,7 +78,7 @@ Prompts can be edited directly in the `/sys_prompts/` directory while the app is
 ### Deleting Sessions
 - Select a session from the dropdown
 - Click "Delete Session"
-- The session file and context file are removed
+- The session file, context file, its `.bak.md` backup and the audit log are removed
 
 ## API Keys
 
@@ -91,6 +93,6 @@ ANTHROPIC_API_KEY=sk-ant-...
 CEREBRAS_API_KEY=...
 ```
 
-UI-configured keys take precedence over `.env` values.
+UI-configured keys take precedence over `.env` values. For OpenRouter, `OPENROUTER_API_KEY` always wins over `OPENAI_API_KEY` — the latter is only a compatibility fallback for setups that never defined a dedicated variable.
 
 ## Environment Variables

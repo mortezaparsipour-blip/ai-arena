@@ -9,15 +9,13 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
-from ..config import config
 from ..engine.rate_limiter import RateLimiter
-from ..engine.tool_executor import ToolExecutor, build_tool_result_envelope
+from ..engine.tool_executor import ToolExecutor
 from ..engine.tool_registry import ToolRegistry, tool_registry
-from ..engine.tool_parser import ToolCallParseError, has_tool_call, parse_tool_call
+from ..engine.tool_parser import has_tool_call
 from ..models.agent import Agent
 from ..models.message import Message
 from ..models.session_state import SessionState
@@ -30,20 +28,28 @@ from .session import SessionManager
 class Orchestrator:
     """Main orchestration engine acting as middleware between AI agents.
 
-    The middleware flow for each agent turn:
-    1. Call the agent with its system prompt + conversation history
+    One shot per turn:
+    1. Call the agent with its system prompt + a single user message that
+       inlines the current context file content
     2. Detect whether the response contains a tool call
-    3. If tool call → execute it → return result to same agent (retry loop)
-    4. If clean execution → forward updated context to next agent
-    5. If no tool call → forward response to next agent
+    3. If tool call → execute it once → record the envelope message → the
+       turn ends (the provider is NOT re-called with the result)
+    4. If no tool call → record the agent message + a no-write warning
+    5. Either way the turn's message is returned, and the caller (step)
+       advances to the next agent. Only a failed/stopped turn returns None
+       and leaves the loop positioned on the same agent.
     """
+
+    # Id of the session the background loop is currently executing. Kept as
+    # a class attribute default so ``__new__``-constructed test fakes that
+    # never run ``__init__`` still read ``None`` instead of raising.
+    _loop_session_id: Optional[str] = None
 
     def __init__(
         self,
         session_manager: SessionManager | None = None,
         rate_limiter: RateLimiter | None = None,
         tool_registry_instance: ToolRegistry | None = None,
-        max_tool_retries: int = 3,
     ) -> None:
         """Initialize orchestrator.
 
@@ -51,7 +57,6 @@ class Orchestrator:
             session_manager: Session manager instance. Created if not provided.
             rate_limiter: Rate limiter instance. Created if not provided.
             tool_registry_instance: Tool registry. Uses global if not provided.
-            max_tool_retries: Maximum retry attempts for failed tool calls.
         """
         self.session_manager = session_manager or SessionManager()
         self.rate_limiter = rate_limiter or RateLimiter()
@@ -62,7 +67,6 @@ class Orchestrator:
         self._last_error: Optional[str] = None
         self._providers: dict[str, BaseProvider] = {}
         self.tool_registry = tool_registry_instance or tool_registry
-        self.max_tool_retries = max_tool_retries
 
     # -- Thread-safe status accessors -----------------------------------------
     # The background loop writes these flags; the Streamlit main thread reads
@@ -93,6 +97,32 @@ class Orchestrator:
         """Return whether the background thread has been started and is alive."""
         thread = self._loop_thread
         return thread is not None and thread.is_alive()
+
+    def get_running_session_id(self) -> Optional[str]:
+        """Return the id of the session the background loop is executing."""
+        with self._state_lock:
+            return self._loop_session_id
+
+    def _set_loop_session_id(self, session_id: Optional[str]) -> None:
+        with self._state_lock:
+            self._loop_session_id = session_id
+
+    def ensure_startable(self, session: SessionState) -> None:
+        """Raise if the background loop is busy with a *different* session.
+
+        Starting session B while the loop still runs session A would flag B
+        as ``is_running`` with no worker actually processing it — the UI
+        then shows a phantom "Running" state. Callers (UI Start/Resume)
+        catch the error and tell the user to stop the current session first.
+
+        Raises:
+            RuntimeError: If the loop thread is alive on another session.
+        """
+        if self.is_loop_alive() and self.get_running_session_id() != session.id:
+            raise RuntimeError(
+                "Another session is already running in the background. "
+                "Stop it before starting this one."
+            )
 
     def register_provider(self, name: str, provider: BaseProvider) -> None:
         """Register a provider by name."""
@@ -150,7 +180,6 @@ class Orchestrator:
         self,
         agent: Agent,
         session: SessionState,
-        tool_result_envelope: str | None = None,
     ) -> list[dict[str, str]]:
         """Build the message list for a provider API call.
 
@@ -172,9 +201,6 @@ class Orchestrator:
         Args:
             agent: The agent whose turn it is.
             session: Current session state.
-            tool_result_envelope: Optional tool result to inject as the
-                user message when retrying after a tool call. With the
-                new one-shot flow this is rarely set.
 
         Returns:
             List of message dicts for the provider.
@@ -182,31 +208,26 @@ class Orchestrator:
         messages: list[dict[str, str]] = []
 
         # System message with agent instructions and tool manual.
-        inject_tools = not tool_result_envelope
         system_content = self._build_system_prompt(
-            agent, session=session, inject_tools=inject_tools
+            agent, session=session, inject_tools=True
         )
         messages.append({"role": "system", "content": system_content})
 
-        # Single user message drives this turn.
-        # - Tool retry path: hand the tool result envelope back.
-        # - Otherwise: inline the current file state so the model can
-        #   produce a write_file call without needing read_file.
-        if tool_result_envelope:
-            messages.append({"role": "user", "content": tool_result_envelope})
-        else:
-            current = self._read_context(session) or "(empty file)"
-            messages.append({
-                "role": "user",
-                "content": (
-                    f"Current state of the context file "
-                    f"({session.context_file_path}):\n\n"
-                    f"```\n{current}\n```\n\n"
-                    "Produce your improved version. Call write_file with "
-                    "the COMPLETE new content of the file. "
-                    "Do not call read_file — the current state is above."
-                ),
-            })
+        # Single user message drives this turn: inline the current file
+        # state so the model can produce a write_file call without needing
+        # read_file.
+        current = self._read_context(session) or "(empty file)"
+        messages.append({
+            "role": "user",
+            "content": (
+                f"Current state of the context file "
+                f"({session.context_file_path}):\n\n"
+                f"```\n{current}\n```\n\n"
+                "Produce your improved version. Call write_file with "
+                "the COMPLETE new content of the file. "
+                "Do not call read_file — the current state is above."
+            ),
+        })
 
         return messages
 
@@ -214,14 +235,12 @@ class Orchestrator:
         self,
         agent: Agent,
         session: SessionState,
-        tool_result_envelope: str | None = None,
     ) -> str:
         """Call the provider API for the given agent.
 
         Args:
             agent: The agent whose turn it is.
             session: Current session state.
-            tool_result_envelope: Optional tool result to inject.
 
         Returns:
             Response text from the model.
@@ -233,7 +252,7 @@ class Orchestrator:
         if provider is None:
             raise ProviderError(f"Provider '{agent.provider}' is not registered.")
 
-        messages = self._build_messages(agent, session, tool_result_envelope)
+        messages = self._build_messages(agent, session)
 
         if session.is_dry_run:
             return self._simulate_response(agent, session)
@@ -285,18 +304,21 @@ class Orchestrator:
     ) -> Optional[Message]:
         """Execute a single agent turn with full middleware logic.
 
-        The middleware flow:
-        1. Call the agent
-        2. Check for tool calls in the response
-        3. If tool call → execute with retries → return result to same agent
-        4. If clean execution → forward to next agent
-        5. If no tool call → forward to next agent
+        One shot per turn:
+        1. Call the agent exactly once
+        2. If the response carries a tool call, execute it once and record
+           the envelope message (the provider is NOT re-called)
+        3. Otherwise record the agent message + a no-write warning
 
         Args:
             session: Current session state.
 
         Returns:
-            The Message created by this turn, or None if stopped.
+            The Message created by this turn — the envelope message for
+            tool-call turns, the agent message for prose turns — or None
+            when the turn failed (provider error) or the session was
+            stopped. The caller advances to the next agent only on a
+            non-None result.
         """
         agent = session.get_current_agent()
         if agent is None:
@@ -318,7 +340,6 @@ class Orchestrator:
         # Initialize tool executor for this turn
         executor = ToolExecutor(
             registry=self.tool_registry,
-            max_retries=session.tool_max_retries,
             session_id=session.id,
         )
 
@@ -346,28 +367,33 @@ class Orchestrator:
                     f"Stopping after {session.max_consecutive_errors} consecutive "
                     f"provider errors. Last: {exc}"
                 )
-            self.session_manager._save_session(session)
-            # Always return None so step() does NOT advance past the
-            # failed agent — the next iteration either retries the same
-            # agent or, once the threshold trips, exits via is_running.
+            # Return None so step() does NOT advance past the failed
+            # agent — the next iteration either retries the same agent
+            # or, once the threshold trips, exits via is_running.
+            # Persistence is owned by step(), which saves after we return.
             return None
 
         # Process tool calls in the response (one shot per turn).
         # The orchestrator does NOT re-call the agent with the tool
         # envelope — that's how the read loop happened.
-        final_response, last_result = self._process_tool_calls(
+        final_response, last_result, turn_message = self._process_tool_calls(
             agent=agent,
             session=session,
             executor=executor,
             response=response,
         )
 
-        # If final_response is None, a tool call was processed and
-        # _process_tool_calls already recorded the envelope message.
-        # Skip the duplicate message append.
-        if final_response is None:
+        # Tool-call turn: _process_tool_calls already recorded the envelope
+        # message. Return it so step() advances to the next agent — this is
+        # the fix for the regression that left the loop positioned on the
+        # same agent forever, re-billing an API call on every retry.
+        if turn_message is not None:
             session.record_success()
-            self.session_manager._save_session(session)
+            return turn_message
+
+        if final_response is None:
+            # The session was stopped before/while processing the tool
+            # call — nothing to record, nothing to advance.
             return None
 
         # No tool call was processed — record a normal agent message.
@@ -397,7 +423,6 @@ class Orchestrator:
         )
         session.messages.append(warning)
         session.record_success()
-        self.session_manager._save_session(session)
 
         return message
 
@@ -407,18 +432,18 @@ class Orchestrator:
         session: SessionState,
         executor: ToolExecutor,
         response: str,
-    ) -> tuple[str | None, ToolResult | None]:
+    ) -> tuple[str | None, ToolResult | None, Message | None]:
         """Process AT MOST ONE tool call in an agent's response, then
         return. The orchestrator does NOT re-call the same agent with the
         tool envelope — that's how the read loop happened.
 
         One shot per turn:
-        1. If the response has no tool call → return (response, None).
+        1. If the response has no tool call → return (response, None, None).
         2. If the response has a tool call → execute it (write_file
            updates the context file, read_file is now a no-op since the
            orchestrator already injects the file content in the user
            message), record the envelope in session.messages, and
-           return (envelope, last_result).
+           return (None, last_result, envelope_msg).
         3. The next agent then gets a fresh user message with the
            (possibly updated) file content.
 
@@ -429,15 +454,20 @@ class Orchestrator:
             response: Initial response from the agent.
 
         Returns:
-            Tuple of (final_response, last_result). last_result is None
-            when no tool call was processed. final_response is None if
-            the session was stopped.
+            Tuple of (final_response, last_result, turn_message).
+            - No tool call (or an unparseable fence): ``(response, None,
+              None)`` — the caller treats the response as prose.
+            - Tool call processed: ``(None, last_result, envelope_msg)`` —
+              the envelope message is the sole record for this turn and is
+              already appended to session.messages. The caller returns it
+              so step() advances to the next agent.
+            - Session stopped: ``(None, None, None)``.
         """
         if self._stop_event.is_set():
-            return None, None
+            return None, None, None
 
         if not has_tool_call(response):
-            return response, None
+            return response, None, None
 
         # Snapshot the context file BEFORE the tool runs. After execution
         # we diff old vs new so the UI's "Diff" tab and the per-message
@@ -449,7 +479,7 @@ class Orchestrator:
         processed_response, had_tool, last_result = executor.process_response(response)
 
         if not had_tool or last_result is None:
-            return response, None
+            return response, None, None
 
         # Compute the diff for the just-applied write (if any). Only
         # surface a non-empty diff when the file actually changed, so
@@ -462,8 +492,8 @@ class Orchestrator:
         # Record the tool result envelope in the message log. We mark
         # it as a system message so the UI shows it under the SYS badge.
         # Do NOT return the raw envelope as the agent message — that's
-        # internal protocol data. The caller (run_turn) will NOT append
-        # a duplicate message for tool-call turns.
+        # internal protocol data. The envelope_msg is the sole record
+        # for this turn; the caller returns it so step() advances.
         envelope_msg = Message(
             agent_id=agent.id,
             agent_name=agent.name,
@@ -475,12 +505,8 @@ class Orchestrator:
             context_diff=diff or None,
         )
         session.messages.append(envelope_msg)
-        self.session_manager._save_session(session)
 
-        # Return None as the agent response so run_turn skips the
-        # duplicate message append. The envelope_msg above is the
-        # sole record for this turn.
-        return None, last_result
+        return None, last_result, envelope_msg
 
     def start_session(
         self,
@@ -503,10 +529,10 @@ class Orchestrator:
         # the loop doesn't immediately bail out because of failures that
         # happened before the user hit Start again.
         session.consecutive_errors = 0
-        # Stash the task brief on the session so it can be sent to the
-        # model as the first user message on round 0. The context file
-        # itself stays as a clean skeleton — agents never see the
-        # initial prompt again unless they re-read the file.
+        # Keep the task brief on the session for persistence and export.
+        # The model never receives ``initial_prompt`` as a message — the
+        # brief reaches agents through the context file, which is seeded
+        # with it right below. One channel, one source of truth.
         session.initial_prompt = initial_prompt
 
         # Update the existing rate limiter's delay without rebuilding it,
@@ -612,7 +638,10 @@ class Orchestrator:
             session: Current session state.
 
         Returns:
-            The Message from this turn, or None.
+            The Message from this turn — the agent message for prose
+            turns or the envelope message for tool-call turns — or None
+            when the turn failed or was stopped. Only a non-None result
+            advances the loop to the next agent.
         """
         if session.is_paused or not session.is_running:
             return None
@@ -632,9 +661,12 @@ class Orchestrator:
             return None
 
         message = self.run_turn(session)
-        if message:
+        if message is not None:
             session.advance()
 
+        # Single persistence point per turn: run_turn mutates messages and
+        # the success/error counters, advance() mutates the loop position —
+        # one save here covers both.
         self.session_manager._save_session(session)
         return message
 
@@ -647,6 +679,7 @@ class Orchestrator:
         accessors so the main (Streamlit) thread can read them safely.
         """
         self._set_loop_running(True)
+        self._set_loop_session_id(session.id)
         try:
             while session.is_running and not session.is_paused and not self._stop_event.is_set():
                 if session.is_complete():
@@ -662,6 +695,7 @@ class Orchestrator:
                 time.sleep(poll_interval)
         finally:
             self._set_loop_running(False)
+            self._set_loop_session_id(None)
             try:
                 self.session_manager._save_session(session)
             except Exception:  # noqa: BLE001
@@ -671,12 +705,23 @@ class Orchestrator:
         """Spawn the orchestration loop in a daemon thread.
 
         Returns the thread handle so the caller can join() if needed.
-        If a previous thread is still alive, returns it without spawning
-        a second one.
+        If the loop is already alive on this same session, returns the
+        existing thread instead of spawning a second one.
+
+        Raises:
+            RuntimeError: If the loop is alive on a *different* session.
+                Starting a second session would leave it flagged
+                ``is_running`` with no worker processing it (the phantom
+                "Running" state). Callers should stop the current session
+                first — the UI does this via ``ensure_startable``.
         """
         existing = self._loop_thread
         if existing is not None and existing.is_alive():
+            self.ensure_startable(session)
             return existing
+        # Claim the loop slot before starting the thread so a concurrent
+        # start_background call sees the correct session id immediately.
+        self._set_loop_session_id(session.id)
         thread = threading.Thread(
             target=self.run_loop,
             args=(session,),

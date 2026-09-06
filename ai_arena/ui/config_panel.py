@@ -161,23 +161,10 @@ def render_config_panel(
                 "Rate limit (sec)",
                 min_value=0,
                 max_value=300,
-                value=st.session_state.get("rate_limit", 5),
+                value=st.session_state.get("rate_limit", config.default_rate_limit),
                 key="rate_limit",
                 help="Minimum seconds between API calls.",
             )
-        col3, col4 = st.columns(2)
-        with col3:
-            tool_max_retries = st.number_input(
-                "Tool retries",
-                min_value=0,
-                max_value=10,
-                value=st.session_state.get("tool_max_retries", 3),
-                key="tool_max_retries",
-                help="How many times the orchestrator retries a failed tool call "
-                     "before injecting an error envelope back into the agent.",
-            )
-        with col4:
-            st.empty()  # placeholder for future knob; keeps col3/col4 visually balanced
         is_dry_run = st.checkbox(
             "Dry-run mode",
             value=st.session_state.get("is_dry_run", False),
@@ -331,6 +318,13 @@ def render_config_panel(
             elif i == 1:
                 role = AgentRole.OPTIMIST
 
+            enabled = st.checkbox(
+                "Enabled",
+                value=st.session_state.get(f"agent_enabled_{i}", True),
+                key=f"agent_enabled_{i}",
+                help="Disabled agents are skipped by the orchestration loop.",
+            )
+
             agents.append(Agent(
                 id=f"agent_{i}",
                 name=name,
@@ -341,6 +335,7 @@ def render_config_panel(
                 api_key=effective_api_key,
                 max_tokens=int(max_tokens),
                 color=colors[i % len(colors)],
+                enabled=enabled,
             ))
 
     # --- Step 2: Sessions (promoted near the top — this is what creates
@@ -380,7 +375,6 @@ def render_config_panel(
                 max_rounds=max_rounds,
                 rate_limit=rate_limit,
                 is_dry_run=is_dry_run,
-                tool_max_retries=tool_max_retries,
             )
             st.session_state["current_session_id"] = session.id
             st.rerun()
@@ -393,6 +387,5 @@ def render_config_panel(
         "max_rounds": max_rounds,
         "rate_limit": rate_limit,
         "is_dry_run": is_dry_run,
-        "tool_max_retries": tool_max_retries,
         "session_name": session_name,
     }

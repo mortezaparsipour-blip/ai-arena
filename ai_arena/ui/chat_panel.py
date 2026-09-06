@@ -19,7 +19,7 @@ import streamlit as st
 
 from ..models.message import Message
 from .icons import icon
-from .tokens import AGENT_PALETTE
+from .tokens import AGENT_PALETTE, MSG_VARIANT_COLORS
 
 
 # Stable palette for agent badges. Source of truth lives in ``tokens.py``
@@ -60,16 +60,10 @@ def msg_color_for(variant: str, agent_color: str) -> str:
 
     Always returns a color string — the variant wins over the agent color
     so error/warning/tool/system bubbles are visually distinct regardless
-    of which agent produced them.
+    of which agent produced them. Colors come from ``tokens.py``.
     """
-    if variant == "error":
-        return "#ef4444"
-    if variant == "warning":
-        return "#f59e0b"
-    if variant == "tool-call":
-        return "#f59e0b"
-    if variant == "system":
-        return "#475569"
+    if variant in MSG_VARIANT_COLORS:
+        return MSG_VARIANT_COLORS[variant]
     return agent_color
 
 

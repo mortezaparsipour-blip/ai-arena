@@ -39,12 +39,11 @@ def test_parser():
     print("has_tool_call works correctly")
 
 
-def test_executor():
+def test_executor(tmp_path: Path):
     reg = ToolRegistry()
-    executor = ToolExecutor(registry=reg, max_retries=2, session_id="test")
+    executor = ToolExecutor(registry=reg, session_id="test")
 
-    p = Path("C:/Users/Mahmoud/AppData/Local/Temp/kilo/test_arena.md")
-    p.parent.mkdir(parents=True, exist_ok=True)
+    p = tmp_path / "test_arena.md"
     p.write_text("hello world", encoding="utf-8")
 
     result = executor.execute_tool("read_file", path=str(p))
@@ -60,7 +59,7 @@ def test_executor():
     resp1 = "Some text before\n```tool_call\n{\"tool\": \"read_file\", \"arguments\": {\"path\": \"" + p.as_posix() + "\"}}\n```"
     processed, had_tool, last_result = executor.process_response(resp1)
     assert had_tool
-    # On success the executor now returns the success envelope (with the
+    # On success the executor returns the success envelope (with the
     # tool output) plus the underlying ToolResult — never an empty string.
     # Returning "" used to silently swallow the result and break the
     # orchestrator's main loop; see the 2026-07-19 debug report.
@@ -69,28 +68,41 @@ def test_executor():
     assert last_result.success
     assert "hello world" in processed
     print(f"Processed response: had_tool={had_tool}, envelope_len={len(processed)}")
-
-    p.unlink()
     print("Executor tests passed")
 
 
-def test_retry_on_failure():
+def test_tool_failure_error_envelope(tmp_path: Path):
+    """A failed tool call is executed exactly ONCE (no retry of identical
+    arguments — the one-shot flow never feeds the result back to the
+    model) and produces an error envelope for the message log."""
     reg = ToolRegistry()
-    executor = ToolExecutor(registry=reg, max_retries=2, session_id="test2")
+    executor = ToolExecutor(registry=reg, session_id="test2")
 
-    resp = "```tool_call\n{\"tool\": \"read_file\", \"arguments\": {\"path\": \"C:/nonexistent/file.md\"}}\n```"
+    resp = "```tool_call\n{\"tool\": \"read_file\", \"arguments\": {\"path\": \"" + (tmp_path / "nonexistent.md").as_posix() + "\"}}\n```"
     processed, had_tool, last_result = executor.process_response(resp)
     assert had_tool
     assert processed != ""  # Should return error envelope
     assert last_result is not None
     assert not last_result.success
     assert "error" in processed.lower() or "failed" in processed.lower()
-    print(f"Retry test: error envelope returned correctly")
+    assert "NOT retried" in processed, (
+        "error envelope must not promise a retry that never happens"
+    )
+
+    call = parse_tool_call(resp)
+    envelope = build_tool_error_envelope(call, "boom")
+    assert "boom" in envelope
+    assert "NOT retried" in envelope
+    print("Failure test: single-attempt error envelope returned correctly")
 
 
 if __name__ == "__main__":
+    import tempfile
+
     test_tool_registry()
     test_parser()
-    test_executor()
-    test_retry_on_failure()
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        test_executor(tmp)
+        test_tool_failure_error_envelope(tmp)
     print("\nAll middleware component tests passed!")

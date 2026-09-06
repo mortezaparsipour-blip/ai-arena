@@ -6,20 +6,14 @@ only requires registering it here.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-from ..tools.base import BaseTool, ToolResult
+from ..tools.base import BaseTool
 from ..tools.file_tools import (
     AppendFileTool,
     PatchFileTool,
     ReadFileTool,
     SummarizeContextTool,
     WriteFileTool,
-    compute_diff,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 class ToolRegistry:
@@ -87,8 +81,9 @@ class ToolRegistry:
             "- Output ONLY the tool call JSON when you want to use a tool",
             "- Do NOT wrap the JSON in extra prose",
             "- Use valid JSON syntax with double quotes",
-            "- After a successful tool call, the system will return a `tool_result` block with the outcome",
-            "- If a tool call fails, you will receive an error message and should retry with corrected arguments",
+            "- Make AT MOST ONE tool call per turn, and it must be `write_file` with the COMPLETE new content of the context file",
+            "- The system executes your tool call immediately after your turn ends; you will NOT receive a `tool_result` back — do not wait for one",
+            "- There is NO retry: if the tool call fails, the error is recorded for the user and the turn is over. Get the call right the first time",
             "",
             "## Available Tools",
             "",
@@ -116,17 +111,11 @@ class ToolRegistry:
             lines.append("```")
             lines.append("")
 
-        lines.append("## Tool Result Format")
+        lines.append("## What Happens After Your Tool Call")
         lines.append("")
-        lines.append("After a tool call, you will receive a result in this format:")
-        lines.append("")
-        lines.append("```tool_result")
-        lines.append('{"success": true, "output": "<result content>", "error": ""}')
-        lines.append("```")
-        lines.append("")
-        lines.append("- `success: true` means the tool executed successfully")
-        lines.append("- `success: false` means the tool failed; `error` contains the reason")
-        lines.append("- Always check the result and proceed accordingly")
+        lines.append("- The orchestrator executes the call immediately and records the outcome in the session log for the user")
+        lines.append("- You will NOT see a `tool_result` in this conversation — the next agent receives the updated file content directly")
+        lines.append("- A failed call is NOT retried and NOT sent back to you; end your turn after a single, correct tool call")
         lines.append("")
 
         return "\n".join(lines)

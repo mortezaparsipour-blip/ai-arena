@@ -12,9 +12,7 @@ Layout (responsive, collapses gracefully on mobile):
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
-from typing import Any
 
 import streamlit as st
 
@@ -31,6 +29,7 @@ from .config_panel import render_config_panel
 from .context_panel import render_context_panel
 from .icons import icon
 from .stepper import compute_step, render_step_indicator
+from .status import session_status, status_pill_html
 from .tokens import css_variables_block
 
 
@@ -101,28 +100,15 @@ def _consume_loop_error(orchestrator: Orchestrator) -> str | None:
 def _session_status(session: SessionState, orchestrator: Orchestrator) -> str:
     """Return a short status keyword for the active session.
 
-    One of: ``running``, ``paused``, ``complete``, ``idle``.
+    Delegates to ``ui.status.session_status`` — the single source of truth
+    shared with the context panel badge.
     """
-    loop_alive = orchestrator.is_loop_alive()
-    if session.is_complete():
-        return "complete"
-    if session.is_running and loop_alive:
-        return "running"
-    if session.is_paused:
-        return "paused"
-    return "idle"
+    return session_status(session, orchestrator.is_loop_alive())
 
 
 def _status_pill(status: str) -> str:
     """Return an HTML status pill for the given status keyword."""
-    label = {
-        "running":  ("● Running",   "run"),
-        "paused":   ("⏸ Paused",    "pause"),
-        "complete": ("✓ Complete",  "done"),
-        "idle":     ("○ Idle",      "idle"),
-    }.get(status, ("○ Idle", "idle"))
-    text, cls = label
-    return f"<span class='status-pill {cls}'>{text}</span>"
+    return status_pill_html(status)
 
 
 def _render_status_bar(session: SessionState | None, orchestrator: Orchestrator) -> None:
@@ -207,6 +193,14 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
             if not initial_prompt:
                 st.error("Please enter an initial prompt before starting.")
                 st.stop()
+            # Guard BEFORE mutating session state: starting while the loop
+            # is alive on another session would flag this session as
+            # running with no worker behind it (phantom "Running").
+            try:
+                orchestrator.ensure_startable(session)
+            except RuntimeError as exc:
+                st.error(str(exc))
+                return
             orchestrator.start_session(session, initial_prompt=initial_prompt)
             orchestrator.start_background(session)
             st.rerun()
@@ -232,6 +226,11 @@ def render_control_buttons(orchestrator: Orchestrator, session: SessionState | N
             help="Resume a paused session",
             use_container_width=True,
         ):
+            try:
+                orchestrator.ensure_startable(session)
+            except RuntimeError as exc:
+                st.error(str(exc))
+                return
             orchestrator.resume_session(session)
             orchestrator.start_background(session)
             st.rerun()
@@ -287,8 +286,8 @@ def _render_run_bar(orchestrator: Orchestrator, session: SessionState | None) ->
             )
 
 
-def _render_export_button(session: SessionState) -> None:
-    """Render download button for session export."""
+def _build_export_content(session: SessionState) -> str:
+    """Build the full Markdown export for a session."""
     lines = [
         f"# AI Arena Session: {session.name}",
         f"ID: {session.id}",
@@ -310,11 +309,28 @@ def _render_export_button(session: SessionState) -> None:
     if ctx_path.exists():
         lines.append(ctx_path.read_text(encoding="utf-8"))
 
-    content = "\n".join(lines)
+    return "\n".join(lines)
+
+
+def _render_export_button(session: SessionState) -> None:
+    """Render download button for session export.
+
+    The export body is memoized in ``st.session_state`` keyed on the
+    session's change signature (id, message count, last update). Without
+    the memo, every rerun — including the 2s auto-refresh ticks while a
+    session runs — rebuilt the whole export and re-read the context file
+    for nothing.
+    """
+    signature = (session.id, len(session.messages), session.updated_at.isoformat())
+    cached = st.session_state.get("_export_cache")
+    if not cached or cached[0] != signature:
+        cached = (signature, _build_export_content(session))
+        st.session_state["_export_cache"] = cached
+
     st.download_button(
         label="Export",
         icon="⬇",
-        data=content,
+        data=cached[1],
         file_name=f"ai_arena_session_{session.id}.md",
         mime="text/markdown",
         key="btn_export",
@@ -344,20 +360,26 @@ def _maybe_autorefresh(orchestrator: Orchestrator) -> None:
     The 2-second cadence is a compromise: short enough to feel live, long
     enough that Streamlit's render cost doesn't dominate.
 
-    Uses Streamlit's fragment API (st.fragment) when available; otherwise
-    falls back to streamlit_autorefresh. The old ``time.sleep(2)`` fallback
-    blocked the main thread and made the UI unresponsive.
+    Requires the ``streamlit-autorefresh`` package (declared in
+    pyproject.toml). When it is missing there is no silent degradation —
+    a one-time warning tells the user live refresh is unavailable and the
+    page must be rerun manually. The old ``time.sleep(2)`` fallback
+    blocked the main thread and made the UI unresponsive, which is why
+    there is no in-process fallback anymore.
     """
-    if orchestrator.is_loop_alive():
-        try:
-            from streamlit_autorefresh import st_autorefresh  # type: ignore
+    if not orchestrator.is_loop_alive():
+        return
+    try:
+        from streamlit_autorefresh import st_autorefresh  # type: ignore
 
-            st_autorefresh(interval=2000, key="arena_autorefresh")
-        except ImportError:
-            # Best-effort: use an empty st.empty + timer pattern that
-            # does not block the Streamlit event loop. If nothing works,
-            # the user can still manually rerun the page.
-            pass
+        st_autorefresh(interval=2000, key="arena_autorefresh")
+    except ImportError:
+        if not st.session_state.get("_autorefresh_missing_warned"):
+            st.session_state["_autorefresh_missing_warned"] = True
+            st.warning(
+                "streamlit-autorefresh is not installed — live refresh is "
+                "disabled. Install it (`pip install -e .`) and restart the app."
+            )
 
 
 def render_app() -> None:

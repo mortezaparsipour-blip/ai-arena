@@ -13,8 +13,8 @@ AI Arena is designed to make adding new agents as simple as possible.
    2. [Responsibility 2]
 
    ## Rules
-   - Always read the context first
-   - Write your contributions back to the context
+   - The current context file content is injected into your user message every turn — do NOT call `read_file`
+   - Produce `write_file` with the COMPLETE new content of the context file
    ```
 
 2. **Create a session** in the UI with the desired number of agents
@@ -62,8 +62,8 @@ When creating an agent, you configure:
    3. Summarize findings clearly
 
    ## Rules:
-   - Always use `read_file` first
-   - Use `write_file` or `append_file` to save your analysis
+   - Do NOT call `read_file` — the orchestrator injects the current context content into your user message every turn
+   - Call `write_file` with the COMPLETE new content of the context file
    - Be specific and cite reasoning
    ```
 

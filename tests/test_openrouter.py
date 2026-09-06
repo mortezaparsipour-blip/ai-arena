@@ -90,18 +90,15 @@ def test_not_found_error_maps_to_model_not_found(provider, monkeypatch):
         provider.chat(messages=[{"role": "user", "content": "hi"}], model="unknown-model", api_key="sk-or-ok")
 
 
-def test_openrouter_integration_through_orchestrator():
+def test_openrouter_integration_through_orchestrator(tmp_path: Path):
     from ai_arena.engine.session import SessionManager
     from ai_arena.engine.orchestrator import Orchestrator
     from ai_arena.models.agent import Agent, AgentRole
     from ai_arena.providers.openrouter_provider import OpenRouterProvider
 
-    for f in Path("contexts").glob("session_*.json"):
-        f.unlink()
-    for f in Path("contexts").glob("*.md"):
-        f.unlink()
-
-    sm = SessionManager()
+    # Runtime artifacts go into tmp_path — this test must never delete the
+    # real contexts/ directory contents (it used to wipe every session).
+    sm = SessionManager(storage_dir=tmp_path / "contexts")
     agent = Agent(
         id="a1",
         name="Tester",
@@ -118,6 +115,7 @@ def test_openrouter_integration_through_orchestrator():
         max_rounds=1,
         rate_limit=0,
         is_dry_run=True,
+        context_file=str(tmp_path / "ctx.md"),
     )
     orch = Orchestrator(session_manager=sm)
     orch.register_provider("openrouter", OpenRouterProvider())

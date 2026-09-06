@@ -6,24 +6,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ai_arena.engine.tool_registry import ToolRegistry
-from ai_arena.engine.tool_parser import parse_tool_call, has_tool_call
 from ai_arena.engine.tool_executor import ToolExecutor
 from ai_arena.engine.session import SessionManager
 from ai_arena.engine.orchestrator import Orchestrator
 from ai_arena.models.agent import Agent, AgentRole
 from ai_arena.providers.openai_provider import OpenAIProvider
-from ai_arena.config import config
 
 
-def test_full_middleware_flow():
+def test_full_middleware_flow(tmp_path: Path):
     """Test a complete middleware flow with tool calls."""
-    # Clean up any existing test sessions
-    for f in config.context_storage_dir.glob("session_*.json"):
-        f.unlink()
-    for f in config.context_storage_dir.glob("*.md"):
-        f.unlink()
-
-    sm = SessionManager()
+    sm = SessionManager(storage_dir=tmp_path / "sessions")
     agent1 = Agent(
         id="a1", name="Critic", role=AgentRole.CRITIC,
         system_prompt="You are a critic. Analyze the context.",
@@ -37,7 +29,8 @@ def test_full_middleware_flow():
 
     session = sm.create_session(
         "Middleware Test", [agent1, agent2],
-        max_rounds=2, rate_limit=0, is_dry_run=True
+        max_rounds=2, rate_limit=0, is_dry_run=True,
+        context_file=str(tmp_path / "ctx.md"),
     )
 
     orch = Orchestrator(session_manager=sm)
@@ -106,7 +99,11 @@ def test_tool_manual_injection():
     assert "# Tool Usage Manual" in manual
     assert "## Tool Call Format" in manual
     assert "## Available Tools" in manual
-    assert "## Tool Result Format" in manual
+    assert "## What Happens After Your Tool Call" in manual
+    # The manual must NOT promise a result/retry back to the agent —
+    # in the one-shot flow the model never sees a tool_result.
+    assert "should retry" not in manual
+    assert "you will receive a result" not in manual
 
     # Verify all tools are documented
     for tool in reg.list_tools():
@@ -115,23 +112,22 @@ def test_tool_manual_injection():
 
     # Verify example calls are present
     assert "```tool_call" in manual
-    assert "```tool_result" in manual
 
     print("Tool manual injection test passed!")
 
 
-def test_retry_logic():
-    """Test retry logic with failing tool calls."""
+def test_tool_failure_single_attempt(tmp_path: Path):
+    """A failing tool call is executed once and yields an error envelope."""
     reg = ToolRegistry()
-    executor = ToolExecutor(registry=reg, max_retries=2, session_id="retry_test")
+    executor = ToolExecutor(registry=reg, session_id="retry_test")
 
-    # Test with nonexistent file - should fail after retries
-    resp = "```tool_call\n{\"tool\": \"read_file\", \"arguments\": {\"path\": \"C:/nonexistent/file.md\"}}\n```"
+    # Test with nonexistent file - should fail once, no retries
+    resp = "```tool_call\n{\"tool\": \"read_file\", \"arguments\": {\"path\": \"" + (tmp_path / "missing.md").as_posix() + "\"}}\n```"
     processed, had_tool, _last_result = executor.process_response(resp)
     assert had_tool
     assert processed != ""  # Error envelope returned
     assert "failed" in processed.lower() or "error" in processed.lower()
-    print("Retry logic test passed!")
+    print("Single-attempt tool failure test passed!")
 
 
 def test_context_diff_tracking():
@@ -148,8 +144,12 @@ def test_context_diff_tracking():
 
 
 if __name__ == "__main__":
+    import tempfile
+
     test_tool_manual_injection()
-    test_retry_logic()
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        test_tool_failure_single_attempt(tmp)
+        test_full_middleware_flow(tmp)
     test_context_diff_tracking()
-    test_full_middleware_flow()
     print("\n=== ALL COMPREHENSIVE TESTS PASSED ===")

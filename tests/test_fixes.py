@@ -7,7 +7,10 @@ Covers:
 - P1-6: _save_session is atomic (no .json.tmp file left behind on success).
 - max_tokens: agent dataclass round-trips through to_dict/from_dict and the
   orchestrator forwards it to the provider.
-- tool_max_retries: SessionManager.create_session honours the override.
+- OpenRouter key precedence: the provider-specific env var wins.
+- Sensitive-path deny list: agents cannot read .env / session JSONs.
+- start_background: refuses a second session while the loop is alive.
+- compute_diff: clean unified diff without stray blank lines.
 """
 
 import json
@@ -188,7 +191,7 @@ class _CapturingProvider(OpenAIProvider):
         return "ok"
 
 
-def test_orchestrator_forwards_max_tokens() -> None:
+def test_orchestrator_forwards_max_tokens(tmp_path: Path) -> None:
     orch = Orchestrator()
     _CapturingProvider.captured = []
     orch.register_provider("openai", _CapturingProvider())
@@ -198,10 +201,10 @@ def test_orchestrator_forwards_max_tokens() -> None:
         system_prompt="", provider="openai", model="gpt-4o", api_key="sk-x",
         max_tokens=2048,
     )
-    sm = SessionManager(storage_dir=Path(tempfile.gettempdir()) / "ai_arena_maxtok")
-    sm.storage_dir.mkdir(parents=True, exist_ok=True)
+    sm = SessionManager(storage_dir=tmp_path)
     session = sm.create_session("max_tokens test", [agent], max_rounds=1, rate_limit=0,
-                                 is_dry_run=False)
+                                 is_dry_run=False,
+                                 context_file=str(tmp_path / "ctx.md"))
     session.is_dry_run = True  # skip real API, but still call _call_provider path
     out = orch._call_provider(agent, session)
     assert out.startswith("[DRY RUN]")
@@ -220,21 +223,97 @@ def test_orchestrator_forwards_max_tokens() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tool_max_retries override
+# OpenRouter key precedence (P1-3)
 # ---------------------------------------------------------------------------
-def test_session_tool_max_retries_override(tmp_path: Path) -> None:
+def test_openrouter_key_precedence(monkeypatch) -> None:
+    from ai_arena.config import config
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-provider-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+    assert config.get_api_key("openrouter") == "sk-or-provider-key", (
+        "the provider-specific OPENROUTER_API_KEY must win over OPENAI_API_KEY"
+    )
+
+    # Fallback still works when only OPENAI_API_KEY is defined.
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    assert config.get_api_key("openrouter") == "sk-openai-key"
+
+    # Non-OpenRouter providers only look at their own variable.
+    assert config.get_api_key("openai") == "sk-openai-key"
+    monkeypatch.delenv("OPENAI_API_KEY")
+    assert config.get_api_key("openrouter") == ""
+    print("OpenRouter key precedence OK")
+
+
+# ---------------------------------------------------------------------------
+# start_background refuses a second session (P1-1)
+# ---------------------------------------------------------------------------
+def test_start_background_rejects_second_session() -> None:
+    import threading
+    import time as _time
+
+    from ai_arena.engine.orchestrator import Orchestrator
+    from ai_arena.models.session_state import SessionState
+
+    orch = Orchestrator()
+
+    busy = threading.Thread(target=_time.sleep, args=(1.0,), daemon=True)
+    busy.start()
+    orch._loop_thread = busy
+    orch._set_loop_session_id("session-a")
+
+    other = SessionState(id="session-b", name="B")
+    try:
+        orch.start_background(other)
+    except RuntimeError as exc:
+        assert "already running" in str(exc)
+    else:
+        raise AssertionError("start_background must reject a second session")
+
+    # Same session: returning the existing thread is fine.
+    same = SessionState(id="session-a", name="A")
+    assert orch.start_background(same) is busy
+    print("start_background second-session guard OK")
+
+
+# ---------------------------------------------------------------------------
+# compute_diff cleanliness (P3-9)
+# ---------------------------------------------------------------------------
+def test_compute_diff_clean_output() -> None:
+    from ai_arena.tools.file_tools import compute_diff
+
+    diff = compute_diff("hello\nworld\n", "hello\nthere\n")
+    lines = diff.splitlines()
+    assert lines[0].startswith("---"), f"unexpected diff head: {lines[:2]}"
+    assert lines[1].startswith("+++")
+    # The old keepends+lineterm combination produced stray empty lines
+    # after every content line.
+    assert "" not in lines, f"stray blank lines in diff: {lines}"
+    assert "-world" in lines
+    assert "+there" in lines
+    print("compute_diff clean output OK")
+
+
+# ---------------------------------------------------------------------------
+# delete_session removes orphan files (P3-3)
+# ---------------------------------------------------------------------------
+def test_delete_session_removes_orphans(tmp_path: Path) -> None:
     sm = SessionManager(storage_dir=tmp_path)
     agent = Agent(id="a", name="A", role=AgentRole.CRITIC,
                   system_prompt="x", provider="openai", model="gpt-4o", api_key="")
-    session = sm.create_session("retries", [agent], max_rounds=1,
-                                 rate_limit=0, tool_max_retries=7)
-    assert session.tool_max_retries == 7
-    # Reload to confirm it persisted.
-    sm2 = SessionManager(storage_dir=tmp_path)
-    reloaded = sm2.get_session(session.id)
-    assert reloaded is not None
-    assert reloaded.tool_max_retries == 7
-    print("SessionManager tool_max_retries override OK")
+    session = sm.create_session("orphans", [agent], max_rounds=1, rate_limit=0)
+    ctx_path = Path(session.context_file_path)
+    backup_path = ctx_path.with_suffix(".bak.md")
+    backup_path.write_text("backup", encoding="utf-8")
+    audit_path = tmp_path / f"audit_{session.id}.log"
+    audit_path.write_text("[audit]", encoding="utf-8")
+
+    assert sm.delete_session(session.id) is True
+    assert not ctx_path.exists()
+    assert not backup_path.exists(), ".bak.md backup must be deleted too"
+    assert not audit_path.exists(), "audit log must be deleted too"
+    assert not (tmp_path / f"session_{session.id}.json").exists()
+    print("delete_session orphan cleanup OK")
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +340,6 @@ if __name__ == "__main__":
         tmp = Path(td)
         test_session_manager_reload_from_disk(tmp)
         test_save_session_atomic(tmp)
-        test_session_tool_max_retries_override(tmp)
 
     test_parser_nested_tool_call_fence()
     test_parser_raw_json_with_nested_args()
@@ -270,6 +348,12 @@ if __name__ == "__main__":
     test_rate_limiter_preserves_last_call()
     test_orchestrator_thread_safe_accessors()
     test_agent_max_tokens_round_trip()
-    test_orchestrator_forwards_max_tokens()
+    with tempfile.TemporaryDirectory() as td:
+        test_orchestrator_forwards_max_tokens(Path(td))
+    test_openrouter_key_precedence()
+    test_start_background_rejects_second_session()
+    test_compute_diff_clean_output()
+    with tempfile.TemporaryDirectory() as td:
+        test_delete_session_removes_orphans(Path(td))
     test_design_tokens_module_loads()
     print("\nAll fix-regression tests passed!")

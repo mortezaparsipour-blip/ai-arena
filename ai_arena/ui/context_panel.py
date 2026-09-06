@@ -14,17 +14,17 @@ from typing import Any
 import streamlit as st
 
 from .icons import icon
+from .status import status_badge_html
 
 
-def _status_badge(session: Any) -> str:
-    """Return an HTML status chip for the context panel header."""
-    if session.is_running:
-        return "<span class='status-pill run'>● Running</span>"
-    if session.is_paused:
-        return "<span class='status-pill pause'>⏸ Paused</span>"
-    if session.is_complete():
-        return "<span class='status-pill done'>✓ Complete</span>"
-    return "<span class='status-pill idle'>○ Idle</span>"
+def _status_badge(session: Any, loop_alive: bool = True) -> str:
+    """Return an HTML status chip for the context panel header.
+
+    Delegates to ``ui.status.status_badge_html`` — the single source of
+    truth shared with the run bar, so the priority (complete > running >
+    paused > idle) and the loop-liveness check can't drift apart again.
+    """
+    return status_badge_html(session, loop_alive)
 
 
 def _last_diff(messages: list[Any]) -> str:
@@ -57,7 +57,7 @@ def render_context_panel(
     st.markdown(
         f"<div class='panel-header'>"
         f"<span class='panel-title'>{icon('file_text', 18)} Shared Context</span>"
-        f"{_status_badge(session)}"
+        f"{_status_badge(session, orchestrator.is_loop_alive())}"
         f"</div>"
         f"<div class='panel-subheader'>{active_chip}</div>",
         unsafe_allow_html=True,

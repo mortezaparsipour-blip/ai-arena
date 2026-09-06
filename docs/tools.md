@@ -16,7 +16,7 @@ AI Agent A → App (Middleware) → Tool Registry → Tool Execution → Result 
 |-----------|----------|---------------|
 | **Tool Registry** | `ai_arena/engine/tool_registry.py` | Single source of truth for all tools |
 | **Tool Parser** | `ai_arena/engine/tool_parser.py` | Parses tool calls from AI responses |
-| **Tool Executor** | `ai_arena/engine/tool_executor.py` | Executes tools with retry logic and audit logging |
+| **Tool Executor** | `ai_arena/engine/tool_executor.py` | Executes tools (one attempt each) and audit logs every call |
 | **Base Tool** | `ai_arena/tools/base.py` | Abstract base class for all tools |
 | **File Tools** | `ai_arena/tools/file_tools.py` | Concrete file manipulation tools |
 
@@ -45,12 +45,16 @@ The app uses a structured JSON format wrapped in a `tool_call` code fence. This 
 - Output ONLY the tool call JSON when you want to use a tool
 - Do NOT wrap the JSON in extra prose
 - Use valid JSON syntax with double quotes
-- After a successful tool call, the system will return a `tool_result` block
-- If a tool call fails, you will receive an error message and should retry with corrected arguments
+- Make AT MOST ONE tool call per turn — the current prompt design expects a
+  single `write_file` with the COMPLETE new context content
+- The orchestrator executes the call right after the turn ends; the agent
+  does NOT receive a `tool_result` back and must not wait for one
+- There is NO retry: a failed call is logged for the user and the turn is over
 
 ## Tool Result Envelope
 
-When returning results to an AI, the app wraps them in a clearly labeled structure:
+Tool outcomes are recorded in the session message log (visible to the user)
+wrapped in a clearly labeled structure:
 
 ````markdown
 ```tool_result
@@ -64,7 +68,8 @@ When returning results to an AI, the app wraps them in a clearly labeled structu
 
 - `success: true` means the tool executed successfully
 - `success: false` means the tool failed; `error` contains the reason
-- The AI checks the result and proceeds accordingly
+- In the one-shot flow this envelope is NOT fed back to the agent that
+  produced the call — the next agent simply receives the updated file content
 
 ## Middleware Flow
 
@@ -72,12 +77,11 @@ For each agent turn, the app follows this one-shot middleware flow:
 
 1. **Call the agent** with system prompt + tool manual + file content inlined in user message
 2. **Detect tool calls** in the response using the parser
-3. **If tool call detected (one shot — no re-call):**
-   - Execute the tool via the registry
-   - If success → record envelope as system message, advance to next agent
-   - If failure → retry up to `tool_max_retries` times (default: 3)
-   - If max retries exceeded → record error envelope, degrade gracefully
-4. **If no tool call** → record agent message, advance to next agent
+3. **If tool call detected (one shot — no re-call, no retry):**
+   - Execute the tool once via the registry
+   - Success → record envelope as system message → advance to next agent
+   - Failure → record error envelope for the user → advance to next agent
+4. **If no tool call** → record agent message + `[WARNING]` (no file change), advance to next agent
 5. **Context file is already updated** by the tool (e.g. `write_file`)
 6. **Advance to next agent** in the ping-pong loop
 
@@ -85,12 +89,15 @@ For each agent turn, the app follows this one-shot middleware flow:
 > tool. Each turn is exactly one provider call. This prevents the "read loop"
 > bug where an agent would repeatedly call `read_file` in an inner loop.
 
-### Retry Logic
+### Failure Handling
 
-- **Max retries:** Configurable per session via `tool_max_retries` (default: 3)
-- **Retry trigger:** Malformed tool call OR tool execution failure
-- **Retry mechanism:** Return error envelope to the same agent with retry instructions
-- **Graceful degradation:** If max retries exceeded, log warning and continue loop with current response
+- **Attempts:** Every tool call is executed exactly once — the file
+  operations are local and deterministic, so re-running identical arguments
+  cannot change the outcome
+- **On failure:** An error envelope is recorded in the message log (with a
+  note that the call was NOT retried) and the loop advances to the next agent
+- **Malformed calls:** An unparseable `tool_call` fence is treated as prose
+  and triggers the standard no-write warning
 
 ## Available Tools
 
@@ -241,9 +248,20 @@ tool_registry.register(MyCustomTool())
 ## Tool Security
 
 Tools execute on the local file system. To prevent abuse:
-- All paths are resolved relative to the project root
+
+- **Writes are sandboxed to the session's context file** — while a session
+  runs, `write_file` / `append_file` / `patch_file` refuse any path that
+  does not resolve to the bound context file
+- **Reads stay inside the project root** — `read_file` and
+  `summarize_context` reject paths that escape the root (no `~/.ssh`,
+  `/etc/passwd`, ...)
+- **Sensitive paths are denied even inside the root** — `.env*`, `*.pem`,
+  `*.key`, `secrets.toml`, the `.git` / `.streamlit` / `.venv` directories,
+  and the session files under `contexts/` (`session_*.json` carries every
+  agent's API key, `audit_*.log`) can never be read by agents
+- All paths are resolved against the project root and symlinks/traversals
+  are normalized via `Path.resolve()` before checks
 - Write operations create parent directories automatically
-- No path traversal outside the project directory is allowed
 
 ## Audit Logging
 
@@ -256,7 +274,8 @@ contexts/audit_<session_id>.log
 Log entries include:
 - Timestamp
 - Event type (`tool_call`, `tool_result`, `error`)
-- Tool name and arguments
+- Tool name and arguments (long string values — e.g. the full content of a
+  `write_file` call — are clipped to 300 characters to keep the log bounded)
 - Success/failure status
 - Error details if applicable
 
